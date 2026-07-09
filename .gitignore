@@ -1,0 +1,41 @@
+# Claude
+CLAUDE.md
+.claude/
+
+# Credentials & Secrets
+wazuh-passwords.txt
+*.key
+*.pem
+*.env
+.env*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Packet Tracer
+*.pkt
+
+# Logs
+*.log
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Vector Database (rebuild dari source)
+chroma_db/
+faiss_index/
+*.index
+*.faiss
+
+# RAG Data Sources (di-clone lokal, terlalu besar untuk repo)
+AI-Rag-Integration/data/sigma/
+AI-Rag-Integration/data/rules/
+AI-Rag-Integration/data/cvelistV5/
+AI-Rag-Integration/data/cti/
+AI-Rag-Integration/data/thm/
