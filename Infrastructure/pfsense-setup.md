@@ -332,9 +332,16 @@ ping 10.10.10.10    # cross-zone → harus BLOCK (kalau rule isolasi aktif)
 
 Setelah pfSense running dan terverifikasi, lanjut setup VM berikutnya:
 
+**LAN1 — Server Zone (VMnet2):**
 1. **Web-Server** (`10.10.10.10`) — Ubuntu Server + DVWA
 2. **WIN AD** (`10.10.10.20`) — Windows Server + Active Directory
-3. **Windows PC** (`10.10.20.10`) — Victim workstation
-4. **Compromise-Kali** (`10.10.20.100`) — Attacker VM
 
-Semua VM tersebut tinggal set network adapter ke **Custom: VMnet2** (LAN1) atau **Custom: VMnet3** (LAN2) sesuai zona masing-masing, dan pfSense akan otomatis assign IP via DHCP.
+**LAN2 — Host Zone (VMnet3):**
+3. **Windows 7** (`10.10.20.10`) — Victim workstation
+4. **Windows XP** (`10.10.20.20`) — Victim workstation (legacy)
+5. **Ubuntu Host** (`10.10.20.30`) — Victim workstation (Linux)
+
+**External (Hotspot `192.168.43.x`) — tidak perlu VM di PC:**
+6. **Kali Linux** — External attacker, menyerang dari luar firewall via WAN pfSense
+
+Semua VM di LAN1 set network adapter ke **Custom: VMnet2**, VM di LAN2 set ke **Custom: VMnet3** — pfSense otomatis assign IP via DHCP. Kali cukup dijalankan di laptop/device lain yang connect ke hotspot yang sama.

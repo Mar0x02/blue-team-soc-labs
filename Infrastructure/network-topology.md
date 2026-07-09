@@ -13,18 +13,18 @@ ada beberapa hal yang saya gunakan dalam lab ini:
 Yang unik pada lab ini: **SIEM dan AI kita gak lewat satpam (firewall)**. Mereka posisinya di "luar", langsung connect ke hotspot, jadi bisa monitor semua traffic tanpa terhalang. Sementara server dan host ada di "dalam", dipisahin sama firewall biar lebih aman dan terkontrol.
 
 ## 🏗️ Arsitektur Jaringan
-                [Switch-Hotspot]
-               /       |        \
-              /        |         \
-       [Laptop]   [Laptop]   [pfSense Firewall]
-        M1(AI)    DELL(SIEM)         │
-                                ┌─────┴─────┐
-                                │           │
-                          [Switch]     [Switch]
-                           Server        Host
-                            /   \         /   \
-                      Ubuntu  WinAD    Kali  WinPC
-                      (DVWA)  (AD)    (Attacker)(Victim)
+                       [Switch-Hotspot]
+               /           |          |          \
+              /             |          |           \
+       [Laptop]        [Laptop]    [Kali]     [pfSense Firewall]
+        M1(AI)         DELL(SIEM)  (Attacker)        │
+                                               ┌──────┴──────┐
+                                               │             │
+                                         [Switch]       [Switch]
+                                          Server           Host
+                                           /   \        /   |   \
+                                     Ubuntu  WinAD   Win7  WinXP  Ubuntu
+                                     (DVWA)  (AD)  (Victim)(Victim)(Victim)
 
 ![SOC Lab Topology](./asset/arch.png)
 
@@ -38,6 +38,7 @@ Perangkat ini connect langsung ke hotspot, **tidak melewati firewall**. Mereka b
 | **Switch-Hotspot** | - | Simulasi jaringan WiFi/Hotspot |
 | **Laptop M1** | `192.168.43.x` | Jalankan Ollama AI untuk analisis alert |
 | **Laptop DELL** | `192.168.43.x` | Jalankan Wazuh SIEM untuk monitoring |
+| **Kali Linux** | `192.168.43.x` | External attacker — menyerang via WAN pfSense |
 | **pfSense (WAN)** | `192.168.43.x` | Interface luar firewall |
 | **Gateway Hotspot** | `192.168.43.1` | Router WiFi asli |
 
@@ -56,8 +57,9 @@ Host-host ini juga di balik firewall, tapi di network berbeda dari server. Ini s
 | Device | IP Address | Gateway | Fungsi |
 |--------|------------|---------|--------|
 | **pfSense (LAN 2)** | `10.10.20.1` | - | Pintu masuk zona host |
-| **Windows PC** | `10.10.20.10` | `10.10.20.1` | Workstation victim |
-| **Compromise-kali** | `10.10.20.100` | `10.10.20.1` | Machine attacker (post-exploit) |
+| **Windows 7** | `10.10.20.10` | `10.10.20.1` | Victim workstation |
+| **Windows XP** | `10.10.20.20` | `10.10.20.1` | Victim workstation (legacy) |
+| **Ubuntu Host** | `10.10.20.30` | `10.10.20.1` | Victim workstation (Linux) |
 
 ## 🔥 Kenapa Arsitektur Ini Saya Gunakan?
 
@@ -79,7 +81,7 @@ Ini mirip banget sama kondisi enterprise nyata (dengan sedikit penyesuain):
 - SOC team (Dell & M1) ada di network management terpisah
 - Server production (Web & AD) di network sendiri
 - User workstation (Windows PC) di network berbeda
-- Attacker (Kali) disimulasikan udah berhasil masuk ke network user
+- Attacker (Kali) posisi di luar firewall, menyerang dari hotspot seperti external attacker nyata
 
 ## 📂 File Packet Tracer
 

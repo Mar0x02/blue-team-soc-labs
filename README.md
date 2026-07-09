@@ -34,19 +34,20 @@ Infrastruktur virtual di bawah ini adalah **baseline (standar)** yang berjalan d
 
 | VM Name | OS / Role | Deskripsi & Fungsi |
 | :--- | :--- | :--- |
-| **pfSense** | pfSense / Firewall | Bertindak sebagai *Gateway*, *Router*, dan *Firewall* untuk memisahkan zona jaringan (misal: memisahkan DMZ untuk web server dengan internal LAN). |
-| **Kali Linux** | Kali Linux (Attacker) | Mesin penyerang. **Catatan:** Kali biasanya akan ditempatkan *di dalam* jaringan internal (LAN) untuk mensimulasikan *insider threat* atau serangan pasca-eksploitasi awal, namun ini bisa disesuaikan per lab. |
-| **Ubuntu Server** | Ubuntu (Web Server) | Target server. Secara default akan di-install **DVWA** (Damn Vulnerable Web App) untuk simulasi kerentanan web dan eksfiltrasi data. |
-| **Windows Server** | Windows Server (AD DC) | Bertindak sebagai **Domain Controller** (Active Directory). Mengelola user, group policy, dan autentikasi terpusat. |
-| **Windows Host** | Windows 7 / 10 / 11 | *Victim Workstation*. Mesin klien yang bergabung dengan domain AD. Ini adalah target utama untuk simulasi *ransomware*, *phishing*, atau *lateral movement*. |
-| **EDR / Agent** | *Optional / Wazuh Agent* | VM khusus EDR (Opsional). Secara default, kita akan mengandalkan **Wazuh Agent** yang di-install di setiap VM Windows/Linux untuk mengirim log ke SIEM. |
+| **pfSense** | pfSense / Firewall | Bertindak sebagai *Gateway*, *Router*, dan *Firewall* untuk memisahkan zona jaringan LAN1 (Server) dan LAN2 (Host). |
+| **Ubuntu Server** | Ubuntu Server + DVWA | Target server. Di-install **DVWA** (Damn Vulnerable Web App) untuk simulasi kerentanan web. IP: `10.10.10.10` |
+| **Windows Server** | Windows Server (AD DC) | Bertindak sebagai **Domain Controller** (Active Directory). Mengelola user, group policy, dan autentikasi terpusat. IP: `10.10.10.20` |
+| **Windows 7** | Windows 7 | *Victim Workstation*. Target utama simulasi phishing, ransomware, dan lateral movement. IP: `10.10.20.10` |
+| **Windows XP** | Windows XP | *Victim Workstation* legacy. Simulasi endpoint lama tanpa patch. IP: `10.10.20.20` |
+| **Ubuntu Host** | Ubuntu Desktop | *Victim Workstation* Linux. Simulasi serangan di lingkungan Linux. IP: `10.10.20.30` |
+| **Kali Linux** | Kali Linux (External Attacker) | Mesin penyerang. Posisi **di luar firewall** (hotspot `192.168.43.x`) — mensimulasikan external attacker yang menyerang via internet/WAN pfSense. |
 
 ---
 
 ## 🧠 Lab Philosophy & Rules
 
 1.  **Detection First:** Kita tidak cuma fokus pada "gimana cara nge-exploit", tapi "gimana cara SIEM nge-detect exploit tersebut" dan "gimana cara AI nge-rangkum alert-nya".
-2.  **Internal Threat Focus:** Karena fokus pada *compromised systems*, Kali Linux sering kali akan disimulasikan sudah berada di dalam jaringan (post-exploitation) untuk menguji deteksi *lateral movement* dan *data exfiltration*.
+2.  **External Attacker Simulation:** Kali Linux diposisikan di luar firewall (hotspot) sebagai external attacker — menyerang via WAN pfSense untuk mensimulasikan serangan dari internet. Ini memaksa traffic melewati pfSense sehingga bisa dilog dan dideteksi.
 3.  **Dynamic Environments:** Daftar VM di atas adalah *base environment*. Jika ada lab yang butuh VM tambahan (misal: database server, mail server), detailnya akan ditulis di `Labs/[nama-lab]/README.md`.
 4.  **AI-Assisted SOC:** Memanfaatkan Mac M1 untuk mengubah log mentah yang membingungkan menjadi insight yang bisa dibaca oleh analis L1.
 
@@ -64,8 +65,10 @@ Infrastruktur virtual di bawah ini adalah **baseline (standar)** yang berjalan d
 | pfSense Firewall | ⏳ Pending | Menunggu PC |
 | Web Server (DVWA) | ⏳ Pending | Menunggu PC |
 | Windows AD Domain Controller | ⏳ Pending | Menunggu PC |
-| Windows Victim Workstation | ⏳ Pending | Menunggu PC |
-| Kali Linux (Attacker VM) | ⏳ Pending | Menunggu PC |
+| Windows 7 (Victim) | ⏳ Pending | Menunggu PC |
+| Windows XP (Victim Legacy) | ⏳ Pending | Menunggu PC |
+| Ubuntu Host (Victim Linux) | ⏳ Pending | Menunggu PC |
+| Kali Linux (External Attacker) | ⏳ Pending | Di hotspot, tidak butuh VM di PC |
 | Wazuh Agent di VM-VM | ⏳ Pending | Menunggu VM infrastructure |
 | Integrasi Wazuh → Ollama (alert forwarding) | ⏳ Pending | Menunggu VM + agent setup |
 
