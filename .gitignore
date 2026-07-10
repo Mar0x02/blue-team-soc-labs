@@ -4,6 +4,7 @@ CLAUDE.md
 
 # Credentials & Secrets
 wazuh-passwords.txt
+*-passwords.txt
 *.key
 *.pem
 *.env
