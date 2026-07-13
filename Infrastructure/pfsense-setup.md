@@ -314,6 +314,8 @@ ping 10.10.10.10    # cross-zone → harus BLOCK (kalau rule isolasi aktif)
 - **Status → DHCP Leases:** VM yang connect ke LAN1/LAN2 harus muncul di sini
 - **Status → Traffic Graphs:** ada traffic saat VM ping ke internet
 
+![pfSense Install Done](./asset/pfsense-install.png)
+
 ---
 
 ## Troubleshooting

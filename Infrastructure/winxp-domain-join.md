@@ -135,4 +135,6 @@ Dari WIN AD:
 Get-ADComputer -Filter * | Select Name, DistinguishedName
 ```
 
-Harus muncul `WINXP-VICTIM`.
+Harus muncul `winxp-ef16ad5b7`.
+
+![Windows XP Domain Join Done](./asset/windows%20xp%20ad.png)

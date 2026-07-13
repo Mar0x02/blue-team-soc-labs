@@ -54,7 +54,7 @@ Menginstall dan mengkonfigurasi Windows XP Professional SP3 sebagai **victim wor
 9. **Regional and Language Options:** biarkan default → Next
 10. **Personalize:** isi Name & Organization → Next
 11. **Product Key:** masukkan kalau ada
-12. **Computer name:** `WINXP-VICTIM`, **Administrator password:** buat password (boleh sengaja lemah untuk lab, catat di file credentials)
+12. **Computer name:** `winxp-ef16ad5b7`, **Administrator password:** buat password (boleh sengaja lemah untuk lab, catat di file credentials)
 13. **Date and Time:** sesuaikan timezone → Next
 14. **Network Settings:** pilih **Typical settings** (akan diatur ulang jadi static di Step 4)
 15. **Workgroup or Computer Domain:** biarkan default **WORKGROUP** dulu → Next

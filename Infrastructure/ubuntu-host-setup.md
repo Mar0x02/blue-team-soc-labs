@@ -128,6 +128,8 @@ ping -c 4 8.8.8.8     # internet via pfSense NAT → harus reply
 ping -c 4 10.10.10.10   # Web-Server (LAN1) → harus GAGAL
 ```
 
+![Ubuntu Host Setup Done](./asset/ubuntu%20host.png)
+
 ---
 
 ## Troubleshooting

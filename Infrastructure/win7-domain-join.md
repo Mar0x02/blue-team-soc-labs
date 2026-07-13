@@ -117,6 +117,8 @@ Harus muncul `WIN7-VICTIM` di list — defaultnya masuk container **Computers** 
 Get-ADComputer -Identity "WIN7-VICTIM" | Move-ADObject -TargetPath "OU=Lab-Computers,DC=lab,DC=local"
 ```
 
+![Windows 7 Domain Join Done](./asset/windows%207%20ad.png)
+
 ---
 
 ## Troubleshooting
