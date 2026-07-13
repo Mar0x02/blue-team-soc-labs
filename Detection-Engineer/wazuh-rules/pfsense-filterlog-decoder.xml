@@ -1,0 +1,22 @@
+<!--
+  Custom decoder buat pfSense filterlog syslog (BSD/RFC 3164 format).
+
+  Kenapa custom, bukan pakai default Wazuh (ruleset/decoders/0455-pfsense_decoders.xml):
+  pfSense ngirim syslog tanpa field hostname (contoh: "Jul 12 01:04:25 filterlog[64366]: ..."
+  bukan "Jul 12 01:04:25 pfSense filterlog[64366]: ..."), jadi predecoder Wazuh salah nangkep
+  "filterlog[64366]:" sebagai hostname alih-alih program_name, dan decoder default (yang nyari
+  program_name == filterlog) gak pernah match. Sudah dicoba juga format RFC 5424, sama gagal
+  karena predecoder Wazuh gak otomatis parse header RFC 5424.
+
+  Detail lengkap troubleshooting-nya ada di Infrastructure/pfsense-wazuh-syslog.md.
+
+  Install: copy ke /var/ossec/etc/decoders/local_decoder.xml di Wazuh Manager (Dell), lalu:
+    sudo /var/ossec/bin/wazuh-analysisd -t
+    sudo systemctl restart wazuh-manager
+-->
+
+<decoder name="pfsense-filterlog">
+  <prematch>filterlog</prematch>
+  <regex offset="after_prematch">^\S* \S*,\S*,\S*,\S*,(\S*),(\S*),(\S*),(\S*),\S*,\S*,\S*,\S*,\S*,\S*,\S*,\S*,(\S*),\S*,(\S*),(\S*),(\S*),(\S*),</regex>
+  <order>interface,reason,action,direction,protocol,srcip,dstip,srcport,dstport</order>
+</decoder>
