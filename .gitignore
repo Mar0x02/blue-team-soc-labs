@@ -20,6 +20,9 @@ Thumbs.db
 # Logs
 *.log
 
+# Raw video (GIF hasil convert yang dipakai di README, bukan file mp4-nya)
+*.mp4
+
 # Python
 venv/
 .venv/

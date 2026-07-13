@@ -55,22 +55,34 @@ Infrastruktur virtual di bawah ini adalah **baseline (standar)** yang berjalan d
 
 ## ✅ Status Progress
 
+### AI & SIEM Core (M1 + Dell)
+
 | Komponen | Status | Keterangan |
 | :--- | :---: | :--- |
-| Dell — Ubuntu Server + Wazuh All-in-One | ✅ Done | Running, dashboard accessible |
+| Dell — Ubuntu Server + Wazuh All-in-One | ✅ Done | Manager + Indexer + Dashboard running |
 | M1 — Ollama + model stack | ✅ Done | `llama3.2:1b`, `3b`, `qwen2.5:4b`, `nomic-embed-text` ter-pull |
 | M1 — RAG pipeline (ingest scripts) | ✅ Done | 5 script ingest: Sigma, YARA, MITRE, CVE, THM |
 | M1 — ChromaDB vector database | ✅ Done | Data Sigma + YARA + MITRE + CVE 2022–2026 ter-ingest |
-| PC — VM infrastructure | ⏳ Pending | PC belum datang, VirtualBox/Proxmox belum di-setup |
-| pfSense Firewall | ⏳ Pending | Menunggu PC |
-| Web Server (DVWA) | ⏳ Pending | Menunggu PC |
-| Windows AD Domain Controller | ⏳ Pending | Menunggu PC |
-| Windows 7 (Victim) | ⏳ Pending | Menunggu PC |
-| Windows XP (Victim Legacy) | ⏳ Pending | Menunggu PC |
-| Ubuntu Host (Victim Linux) | ⏳ Pending | Menunggu PC |
-| Kali Linux (External Attacker) | ⏳ Pending | Di hotspot, tidak butuh VM di PC |
-| Wazuh Agent di VM-VM | ⏳ Pending | Menunggu VM infrastructure |
-| Integrasi Wazuh → Ollama (alert forwarding) | ⏳ Pending | Menunggu VM + agent setup |
+
+![Wazuh Dashboard](./Infrastructure/asset/wazuh-dashboard.png)
+
+### Infrastructure — VM & Network (PC)
+
+PC udah datang dan seluruh VM infrastructure di baseline table (bagian [Virtual Infrastructure](#-virtual-infrastructure-the-lab-network) di atas) **sudah dibangun dan running**: pfSense (firewall + segmentasi LAN1/LAN2), Web-Server + DVWA, WIN AD (Domain Controller), Windows 7, Windows XP, Ubuntu Host, dan Kali Linux sebagai external attacker di hotspot. Detail step-by-step tiap komponen ada di `Infrastructure/*.md`.
+
+### Wazuh Agent — Semua Endpoint Ter-monitor
+
+Seluruh 5 endpoint victim (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) sudah punya Wazuh Agent terpasang dan ter-enroll ke Manager (Dell).
+
+![Wazuh Agents](./Infrastructure/asset/wazuh-agent.png)
+
+### Sedang Berjalan / Rencana Selanjutnya
+
+| Komponen | Status | Keterangan |
+| :--- | :---: | :--- |
+| Integrasi Wazuh → Ollama (alert forwarding) | ⏳ Pending | Alert dari SIEM diteruskan ke AI (M1) buat auto-triage/summary |
+| Detection Engineering — Custom Wazuh Rules | 🔄 In Progress | Nutup gap di default ruleset Wazuh (misal fase recon SQLi yang belum ke-detect) — disimpan di `Detection-Engineer/wazuh-rules/` |
+| Lab Attack Simulation | 🔄 In Progress | Simulasi serangan nyata per kategori (SQLi, brute force, command injection, file upload, dst) ke DVWA & endpoint lain, buat validasi detection rule — hasil di `Labs/[nama-lab]/` |
 
 ---
 
