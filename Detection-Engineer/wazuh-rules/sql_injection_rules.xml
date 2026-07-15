@@ -1,0 +1,16 @@
+<!-- Local rules -->
+<!-- Modify it at your will. -->
+
+<group name="sql_injection,web,attack,">
+
+  <rule id="100203" level="8">
+    <decoded_as>web-accesslog</decoded_as>
+    <url type="pcre2">(?i)%27.*group(\s|%20|\+)+by</url>
+    <description>Web attack: SQL Injection - GROUP BY probing terdeteksi di $(url)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>sql_injection,recon,</group>
+  </rule>
+
+</group>
