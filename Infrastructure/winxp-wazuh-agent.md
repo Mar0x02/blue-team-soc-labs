@@ -83,8 +83,6 @@ type C:\Program Files\ossec-agent\client.keys
 
 Terus cek di Wazuh Dashboard — `winxp-ef16ad5b7` harus muncul status **Active**.
 
-![Semua Wazuh Agent Terdaftar](./asset/wazuh-agent.png)
-
 ---
 
 ## Catatan
