@@ -76,13 +76,23 @@ Seluruh 5 endpoint victim (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) sudah p
 
 ![Wazuh Agents](./Infrastructure/asset/wazuh-agent.png)
 
+### Lab Attack Simulation
+
+| Lab | Status | Temuan Utama |
+| :--- | :---: | :--- |
+| **SQL Injection** | ✅ Done | Default ruleset (`31106`) gak detect fase recon (`'`, `ORDER BY`); severity gak proporsional antara recon vs data exfiltration; custom Wazuh rule lagi dibangun bertahap |
+| **Command Injection** | ✅ Done | Command tereksekusi penuh (RCE, sampai arbitrary file write); request **POST** gak ninggalin jejak payload di `access.log` — blind spot kritis, jadi basis penambahan NIDS |
+
+Detail lengkap tiap lab (payload, step-by-step, GIF evidence) ada di `Labs/web-server-attack/[nama-lab]/README.md`.
+
 ### Sedang Berjalan / Rencana Selanjutnya
 
 | Komponen | Status | Keterangan |
 | :--- | :---: | :--- |
 | Integrasi Wazuh → Ollama (alert forwarding) | ⏳ Pending | Alert dari SIEM diteruskan ke AI (M1) buat auto-triage/summary |
-| Detection Engineering — Custom Wazuh Rules | 🔄 In Progress | Nutup gap di default ruleset Wazuh (misal fase recon SQLi yang belum ke-detect) — disimpan di `Detection-Engineer/wazuh-rules/` |
-| Lab Attack Simulation | 🔄 In Progress | Simulasi serangan nyata per kategori (SQLi, brute force, command injection, file upload, dst) ke DVWA & endpoint lain, buat validasi detection rule — hasil di `Labs/[nama-lab]/` |
+| Detection Engineering — Custom Wazuh Rules | 🔄 In Progress | Nutup gap di default ruleset Wazuh (fase recon SQLi) — disimpan di `Detection-Engineer/wazuh-rules/` |
+| NIDS — Suricata/Snort di pfSense | ⏳ Pending | Nutup blind spot POST body yang gak ke-log di `access.log` (temuan lab Command Injection) — deteksi network-wide, independen dari limitasi logging tiap aplikasi |
+| Reverse Shell (lanjutan Command Injection) | ⏳ Pending | Eskalasi dari command injection yang udah confirmed RCE |
 
 ---
 
