@@ -16,6 +16,7 @@ Thumbs.db
 
 # Scratchpad (draft, catatan sementara — bukan bagian writeup resmi)
 scratchpad/
+scratchpad-*
 
 # Packet Tracer
 *.pkt
