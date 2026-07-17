@@ -1,0 +1,21 @@
+<!-- Local rules -->
+<!-- Modify it at your will. -->
+
+<group name="suricata,ids,">
+
+  <rule id="100400" level="3">
+    <decoded_as>suricata-alert</decoded_as>
+    <description>Suricata NIDS: $(suricata.message) [$(protocol)] $(srcip):$(srcport) -> $(dstip):$(dstport)</description>
+  </rule>
+
+  <rule id="100401" level="10">
+    <if_sid>100400</if_sid>
+    <field name="suricata.sid" type="pcre2">:1000001:</field>
+    <description>Suricata NIDS: LOLBin id command output reflected di HTTP response - indikasi command injection</description>
+    <mitre>
+      <id>T1059</id>
+    </mitre>
+    <group>command_injection,</group>
+  </rule>
+
+</group>

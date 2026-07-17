@@ -14,6 +14,9 @@ wazuh-passwords.txt
 .DS_Store
 Thumbs.db
 
+# Scratchpad (draft, catatan sementara — bukan bagian writeup resmi)
+scratchpad/
+
 # Packet Tracer
 *.pkt
 

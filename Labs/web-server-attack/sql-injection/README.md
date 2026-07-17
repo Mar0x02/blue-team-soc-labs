@@ -201,3 +201,39 @@ Cara bacanya: cek log yang udah ke-decode sebagai `web-accesslog`, cari pattern 
 - Divalidasi pakai `wazuh-logtest` (bukan cuma attack beneran + cek dashboard) — cara ini lebih cepat buat isolasi masalah karena langsung nunjukin decoder + rule yang match tanpa perlu generate traffic asli.
 
 **Status:** rule `100203` udah confirmed jalan (muncul di `wazuh-logtest` buat payload `GROUP BY`). Rule tambahan buat pattern lain (`ORDER BY`, `AND`/`OR`, tier exploitation/exfiltration) menyusul bertahap.
+
+---
+
+## Efek Exfiltrasi — Data yang Berhasil Didapat Attacker
+
+Hasil lengkap dari payload `1' UNION SELECT user,password FROM users-- -` (Step 6) — seluruh isi tabel `users` berhasil di-dump dalam satu request:
+
+| Username | Password Hash (MD5) |
+|---|---|
+| `admin` | `5f4dcc3b5aa765d61d8327deb882cf99` |
+| `gordonb` | `e99a18c428cb38d5f260853678922e03` |
+| `1337` | `8d3533d75ae2c3966d7e0d4fcc69216b` |
+| `pablo` | `0d107d09f5bbe40cade3de5c71e9e9b7` |
+| `smithy` | `5f4dcc3b5aa765d61d8327deb882cf99` |
+
+**Analisis dampak:**
+
+1. **Password disimpen sebagai MD5 tanpa salt** — hash jenis ini gampang banget di-crack (gak ada salt buat nyegah rainbow table/dictionary attack, dan MD5 sendiri udah lama dianggap gak aman buat password hashing). Attacker gak butuh brute force karakter acak, cukup cocokin ke wordlist password umum (`rockyou.txt` dkk) atau bahkan database rainbow table online — proses crack-nya bisa dalam hitungan detik.
+2. **`admin` dan `smithy` punya hash IDENTIK** — artinya dua user ini pake **password yang sama persis**. Ini pola umum di dunia nyata (password reuse), dan begitu attacker crack SATU hash, otomatis dapet akses ke DUA akun sekaligus.
+3. **Satu request SQLi ini setara dengan full credential dump** — attacker gak perlu ulang-ulang query per user, `UNION SELECT` sekali jalan langsung nge-exfiltrate seluruh tabel. Ini nunjukin kenapa severity alert buat query kayak gini (rule `31106`, masih level 6 sama kayak recon biasa — lihat temuan di section Verifikasi) **harusnya jauh lebih tinggi** dibanding sekadar percobaan `database()`/`version()`.
+
+### Cracking Hash — Plaintext Password
+
+Hash-hash di atas di-crack pakai `john` (`--format=Raw-MD5`, wordlist `rockyou.txt`), hasilnya **semua 5 hash berhasil di-crack**:
+
+| Username | Plaintext Password |
+|---|---|
+| `admin` | `password` |
+| `gordonb` | `abc123` |
+| `1337` | `charley` |
+| `pablo` | `letmein` |
+| `smithy` | `password` |
+
+![Cracking password hash pakai john](./asset/crack-pass.png)
+
+`5 password hashes cracked, 0 left` — konfirmasi `admin` dan `smithy` emang beneran pake password yang sama (`password`), sesuai analisis hash identik di atas. Semua password ketemu di `rockyou.txt` (wordlist password umum/bocoran), nunjukin password-nya emang lemah — bukan random string, tapi kata-kata umum yang gampang ditebak.

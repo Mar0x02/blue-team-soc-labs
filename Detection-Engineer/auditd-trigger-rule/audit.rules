@@ -1,0 +1,13 @@
+# auditd trigger rules — Web-Server (10.10.10.10)
+# Tujuan: nutup blind spot process execution/LOLBin yang ketemu di lab Command Injection
+# (reverse shell via sh/nc/mkfifo gak ke-detect Wazuh sama sekali walau keliatan di htop)
+# Referensi: Labs/web-server-attack/command-injection/README.md, Infrastructure/web-server-auditd-setup.md
+
+# 2026-07-16 — Catat tiap kali www-data (uid=33, user Apache di Debian/Ubuntu) jalanin proses baru.
+# Normalnya www-data gak pernah perlu spawn shell interaktif/nc — kalau muncul, indikasi kuat
+# command injection lewat web app (DVWA). arch=b64 buat sistem 64-bit.
+-a always,exit -F arch=b64 -S execve -F uid=33 -k www_data_exec
+
+# 2026-07-16 — Sama kayak rule di atas, versi arch=b32 (jaga-jaga ada proses 32-bit yang jalan
+# di sistem, walau base OS-nya 64-bit).
+-a always,exit -F arch=b32 -S execve -F uid=33 -k www_data_exec

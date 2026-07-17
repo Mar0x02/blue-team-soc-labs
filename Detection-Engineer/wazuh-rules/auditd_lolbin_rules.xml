@@ -1,0 +1,15 @@
+<!-- Local rules -->
+<!-- Modify it at your will. -->
+
+<group name="auditd,lolbin,command_injection,">
+
+  <rule id="100300" level="12">
+    <if_sid>80700</if_sid>
+    <field name="audit.key">www_data_exec</field>
+    <description>LOLBin: www-data (Apache) menjalankan proses baru "$(audit.command)" - indikasi command injection</description>
+    <mitre>
+      <id>T1059</id>
+    </mitre>
+  </rule>
+
+</group>

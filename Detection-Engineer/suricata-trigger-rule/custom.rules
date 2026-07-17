@@ -1,0 +1,24 @@
+# Suricata custom trigger rules — pfSense (interface LAN1)
+# Tujuan: nutup gap ET Open ruleset yang gak match skenario spesifik lab Command Injection
+# (attacker non-root/www-data, dan reverse shell LOLBin mkfifo+nc)
+# Referensi: Labs/web-server-attack/command-injection/README.md, Infrastructure/pfsense-suricata-setup.md
+
+# 2026-07-17 — Deteksi dari sisi RESPONSE (setelah command dieksekusi).
+# ET Open default (GPL ATTACK_RESPONSE id check returned root) cuma nyari uid=0(root),
+# gak match kalau attacker cuma dapet shell non-root (www-data, uid=33) - kasus paling umum
+# di command injection lewat web app. Rule ini generic: nyari pola output command `id`
+# (uid=...gid=...) di HTTP response, independen dari privilege level.
+alert http any any -> any any (msg:"LOCAL LOLBin - id command output reflected in HTTP response"; flow:established,to_client; file_data; content:"uid="; content:"gid="; distance:0; within:60; classtype:successful-recon-limited; sid:1000001; rev:1;)
+
+# 2026-07-17 — Deteksi dari sisi REQUEST (sebelum command dieksekusi, lebih preventif).
+# Nyari separator command injection (;, |, ||, &&, backtick, $, newline) yang diikutin
+# nama command/tool yang sering dipake buat LOLBin/reverse shell.
+#
+# Gotcha yang ketemu pas bikin rule ini:
+# 1. Form HTML standar (application/x-www-form-urlencoded) otomatis URL-encode karakter
+#    spesial pas submit — `;` jadi `%3b`, `|` jadi `%7c`, dst. Rule harus nyakup DUA-DUANYA
+#    (literal DAN encoded), gak cukup nyari karakter literal doang.
+# 2. Karakter `;` literal DI DALAM string pcre bikin parser Suricata salah paham nganggep
+#    itu penutup option (soalnya `;` emang separator option di syntax rule Suricata) —
+#    wajib di-escape jadi `\;` biar kebaca sebagai bagian dari regex, bukan separator.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"Detect Command Injection separators in POST Body"; flow: established,to_server; http.method; content: "POST"; http.request_body; pcre:"/(?:\;|%3b|\||%7c|\||&&|%26%26|`|%60|\$|%24|\n|%0a)\s*(?:ping|wget|curl|nc|bash|sh|php|python|perl|whoami|ls|id|mkfifo)/i"; classtype: web-application-attack; sid:1000003; rev:1;)

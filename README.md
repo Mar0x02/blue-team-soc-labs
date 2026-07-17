@@ -81,9 +81,12 @@ Seluruh 5 endpoint victim (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) sudah p
 | Lab | Status | Temuan Utama |
 | :--- | :---: | :--- |
 | **SQL Injection** | ✅ Done | Default ruleset (`31106`) gak detect fase recon (`'`, `ORDER BY`); severity gak proporsional antara recon vs data exfiltration; custom Wazuh rule lagi dibangun bertahap |
-| **Command Injection** | ✅ Done | Command tereksekusi penuh (RCE, sampai arbitrary file write); request **POST** gak ninggalin jejak payload di `access.log` — blind spot kritis, jadi basis penambahan NIDS |
+| **Command Injection** | ✅ Done | Command tereksekusi penuh (RCE, sampai arbitrary file write) + **reverse shell** (LOLBin: `sh`+`nc`+`mkfifo`); request **POST** gak ninggalin jejak payload di `access.log`, dan proses/koneksi reverse shell gak ke-detect sama sekali walau keliatan di `htop` — blind spot total, jadi basis penambahan **NIDS + auditd**. **Remediasi confirmed**: replay skenario yang sama sekarang ke-detect via auditd (rule `100300`) + Suricata custom rule (`100400`/SID `1000003`) |
+| **File Inclusion (LFI/RFI)** | ⏳ Pending | Lanjutan validasi apakah auditd + Suricata yang dibangun buat Command Injection generalisasi ke attack vector beda (path traversal, log poisoning, RFI) — belum dieksekusi |
 
 Detail lengkap tiap lab (payload, step-by-step, GIF evidence) ada di `Labs/web-server-attack/[nama-lab]/README.md`.
+
+> **Kesimpulan akhir kedua lab:** SQLi ngajarin *"data-nya ada tapi rule-nya kurang"* (perlu custom rule), Command Injection ngajarin *"data-nya emang gak pernah ada"* (perlu data source baru — NIDS buat network, auditd buat process execution/LOLBin). Detail perbandingan + verifikasi remediasi lengkap ada di [`Labs/web-server-attack/command-injection/README.md`](./Labs/web-server-attack/command-injection/README.md#kesimpulan-akhir--sql-injection-vs-command-injection).
 
 ### Sedang Berjalan / Rencana Selanjutnya
 
@@ -91,8 +94,9 @@ Detail lengkap tiap lab (payload, step-by-step, GIF evidence) ada di `Labs/web-s
 | :--- | :---: | :--- |
 | Integrasi Wazuh → Ollama (alert forwarding) | ⏳ Pending | Alert dari SIEM diteruskan ke AI (M1) buat auto-triage/summary |
 | Detection Engineering — Custom Wazuh Rules | 🔄 In Progress | Nutup gap di default ruleset Wazuh (fase recon SQLi) — disimpan di `Detection-Engineer/wazuh-rules/` |
-| NIDS — Suricata/Snort di pfSense | ⏳ Pending | Nutup blind spot POST body yang gak ke-log di `access.log` (temuan lab Command Injection) — deteksi network-wide, independen dari limitasi logging tiap aplikasi |
-| Reverse Shell (lanjutan Command Injection) | ⏳ Pending | Eskalasi dari command injection yang udah confirmed RCE |
+| NIDS — Suricata di pfSense | ✅ Done | Engine + decoder/rule Wazuh + custom rule (SID `1000001`, `1000003`) confirmed alert end-to-end dari payload command injection asli — lihat [`pfsense-suricata-setup.md`](./Infrastructure/pfsense-suricata-setup.md) |
+| auditd — Linux Audit Framework di Web-Server | ✅ Done | Nutup blind spot process execution/LOLBin (`sh`, `nc`, `mkfifo`) — custom rule `100300` confirmed alert end-to-end di Wazuh Dashboard, lihat [`web-server-auditd-setup.md`](./Infrastructure/web-server-auditd-setup.md) |
+| Reverse Shell (lanjutan Command Injection) | ✅ Done | Berhasil dapet shell interaktif via LOLBin (mkfifo + nc); confirmed gak ke-detect Wazuh sama sekali (proses maupun koneksi network) |
 
 ---
 

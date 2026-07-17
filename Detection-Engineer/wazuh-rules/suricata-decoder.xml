@@ -1,0 +1,5 @@
+<decoder name="suricata-alert">
+  <prematch>suricata</prematch>
+  <regex offset="after_prematch" type="pcre2">\[\d+\]:\s+\[(\d+:\d+:\d+)\]\s+(.+?)\s+\[Classification:\s+([^\]]+)\]\s+\[Priority:\s+(\d+)\]\s+\{([a-zA-Z]+)\}\s+([\d\.]+):(\d+)\s+->\s+([\d\.]+):(\d+)</regex>
+  <order>suricata.sid,suricata.message,suricata.classification,suricata.priority,protocol,srcip,srcport,dstip,dstport</order>
+</decoder>
