@@ -130,9 +130,46 @@ Rule `31106` map ke **T1190 (Exploit Public-Facing Application)** dari sisi gene
 
 Include `?page=../../../../../var/log/apache2/access.log&cmd=id` — hasilnya PHP warning `failed to open stream`, bukan output `id`. Ini beda karakter warning-nya dari kasus depth-salah sebelumnya (yang biasanya "No such file or directory") — `failed to open stream` lebih mengarah ke **permission**, bukan path yang salah.
 
-Hipotesis: `access.log` di Ubuntu defaultnya `root:adm`, mode `640` — cuma readable sama owner (`root`) dan group `adm`. Proses PHP/Apache jalan sebagai `www-data` (uid `33`, terverifikasi dari log auditd di Step 5), dan `www-data` **bukan** anggota group `adm`. Beda sama `/etc/passwd` yang mode `644` (world-readable), makanya itu bisa kebaca siapapun termasuk `www-data`.
+![Curl reproduce log poisoning gagal](asset/lfi-log-poisoning-permission-denied.png)
 
-Belum diverifikasi langsung (`ls -la /var/log/apache2/access.log` di Web-Server) — dicatat sebagai temuan yang masih perlu dikonfirmasi, bukan kesimpulan final.
+Reproduce lewat `curl` (session cookie DVWA + `security=low`) ke `?page=../../../../../var/log/apache2/access.log&cmd=id` — response-nya eksplisit **`Permission denied`**:
+
+```
+Warning: include(././../../../var/log/apache2/access.log): Failed to open stream: Permission denied in /var/www/html/vulnerabilities/fi/index.php on line 36
+Warning: include(): Failed opening '././../../../var/log/apache2/access.log' for inclusion (include_path='.:/usr/share/php') in /var/www/html/vulnerabilities/fi/index.php on line 36
+```
+
+Ini **mengkonfirmasi langsung** hipotesis permission tanpa perlu `ls -la` manual — pesan error PHP-nya sendiri udah eksplisit nyebut `Permission denied`, bukan cuma dugaan dari perbedaan tipe warning aja. Kesimpulan: `access.log` di Ubuntu defaultnya `root:adm`, mode `640` — cuma readable sama owner (`root`) dan group `adm`. Proses PHP/Apache jalan sebagai `www-data` (uid `33`, terverifikasi dari log auditd di Step 5), dan `www-data` **bukan** anggota group `adm`. Beda sama `/etc/passwd` yang mode `644` (world-readable), makanya itu bisa kebaca siapapun termasuk `www-data`.
+
+![Wazuh alert untuk request log poisoning yang gagal](asset/wazuh-alert-log-poisoning-attempt.png)
+
+Meskipun exploitation-nya gagal (permission denied, gak ada RCE), request ini **tetap ke-log dan tetap fire alert** di Wazuh — rule `31106`, level 6, sama seperti Step 2:
+
+```json
+{
+  "agent": { "ip": "10.10.10.10", "name": "web-server" },
+  "data": {
+    "protocol": "GET",
+    "srcip": "192.168.43.111",
+    "id": "200",
+    "url": "/vulnerabilities/fi/?page=../../../../../var/log/apache2/access.log&cmd=id"
+  },
+  "rule": {
+    "level": 6,
+    "description": "A web attack returned code 200 (success).",
+    "id": "31106",
+    "mitre": {
+      "technique": ["Exploit Public-Facing Application"],
+      "id": ["T1190"],
+      "tactic": ["Initial Access"]
+    }
+  },
+  "full_log": "192.168.43.111 - - [18/Jul/2026:22:02:46 +0700] \"GET /vulnerabilities/fi/?page=../../../../../var/log/apache2/access.log&cmd=id HTTP/1.1\" 200 4365 \"-\" \"curl/8.20.0\"",
+  "timestamp": "2026-07-18T15:02:47.814+0000"
+}
+```
+
+Worth dicatat sebagai gap kedua di rule `31106`: `rule.description` bilang **"returned code 200 (success)"**, tapi "success" di sini cuma berarti Apache/DVWA berhasil ngerender halaman dengan HTTP 200 — bukan berarti exploitation-nya berhasil. Request ini sebenarnya **gagal total** (PHP `Permission denied`, gak ada RCE), tapi tetap diberi label "success" sama rule karena rule cuma ngecek status code response, bukan konten atau outcome sebenarnya dari attack. Analis L1 yang cuma baca description tanpa cek payload/response bisa salah simpulin ini sebagai serangan yang berhasil.
 
 ### Step 5 — LFI + Command Injection (Web Shell)
 
