@@ -22,3 +22,18 @@ alert http any any -> any any (msg:"LOCAL LOLBin - id command output reflected i
 #    itu penutup option (soalnya `;` emang separator option di syntax rule Suricata) —
 #    wajib di-escape jadi `\;` biar kebaca sebagai bagian dari regex, bukan separator.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"Detect Command Injection separators in POST Body"; flow: established,to_server; http.method; content: "POST"; http.request_body; pcre:"/(?:\;|%3b|\||%7c|\||&&|%26%26|`|%60|\$|%24|\n|%0a)\s*(?:ping|wget|curl|nc|bash|sh|php|python|perl|whoami|ls|id|mkfifo)/i"; classtype: web-application-attack; sid:1000003; rev:1;)
+
+# 2026-07-21 — Deteksi Stored XSS (lab Labs/web-server-attack/xss/stored/README.md).
+# Nutup gap yang sama kayak Command Injection: ET Open gak match payload spesifik lab ini.
+# Scope ke field guestbook DVWA (`txtName`, `mtxMessage`) biar gak asal match `<script`
+# di semua traffic HTTP_SERVERS.
+#
+# Gotcha yang sama kayak rule 1000003: form application/x-www-form-urlencoded otomatis
+# encode `<` jadi `%3C` pas submit browser normal — rule harus nyakup literal DAN encoded.
+#
+# Catatan: rule ini cuma nutup momen INJEKSI (submit payload dari attacker, request POST
+# masih ada string payload-nya). Momen REPLAY (visitor lain buka halaman guestbook tanpa
+# ngirim payload apapun di request mereka) gak bisa ketutup rule network-layer apapun —
+# payload-nya udah "menyatu" di response body DB, bukan di request. Lihat hipotesis di
+# README stored XSS.
+alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"Detect Stored XSS payload in POST Body (DVWA guestbook txtName/mtxMessage)"; flow: established,to_server; http.method; content: "POST"; http.request_body; pcre:"/(?:txtName|mtxMessage)=[^&]*(?:<|%3[Cc])\s*(?:script|img|svg|iframe)/i"; classtype: web-application-attack; sid:1000004; rev:1;)

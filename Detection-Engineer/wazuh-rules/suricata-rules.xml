@@ -18,4 +18,14 @@
     <group>command_injection,</group>
   </rule>
 
+  <rule id="100402" level="10">
+    <if_sid>100400</if_sid>
+    <field name="suricata.sid" type="pcre2">:1000004:</field>
+    <description>Suricata NIDS: Stored XSS payload terdeteksi di POST body guestbook (txtName/mtxMessage) - indikasi XSS injection attempt</description>
+    <mitre>
+      <id>T1059.007</id>
+    </mitre>
+    <group>xss,</group>
+  </rule>
+
 </group>
