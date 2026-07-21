@@ -82,7 +82,7 @@ Seluruh 5 endpoint victim (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) sudah p
 | :--- | :---: | :--- |
 | **SQL Injection** | ✅ Done | Default ruleset (`31106`) gak detect fase recon (`'`, `ORDER BY`); severity gak proporsional antara recon vs data exfiltration; custom Wazuh rule lagi dibangun bertahap |
 | **Command Injection** | ✅ Done | Command tereksekusi penuh (RCE, sampai arbitrary file write) + **reverse shell** (LOLBin: `sh`+`nc`+`mkfifo`); request **POST** gak ninggalin jejak payload di `access.log`, dan proses/koneksi reverse shell gak ke-detect sama sekali walau keliatan di `htop` — blind spot total, jadi basis penambahan **NIDS + auditd**. **Remediasi confirmed**: replay skenario yang sama sekarang ke-detect via auditd (rule `100300`) + Suricata custom rule (`100400`/SID `1000003`) |
-| **File Inclusion (LFI/RFI)** | ⏳ Pending | Lanjutan validasi apakah auditd + Suricata yang dibangun buat Command Injection generalisasi ke attack vector beda (path traversal, log poisoning, RFI) — belum dieksekusi |
+| **File Inclusion (LFI)** | ✅ Done | Path traversal ke `/etc/passwd` berhasil & ke-detect (`31106`); log poisoning gagal (`Permission denied`, tapi tetap ke-log); RCE akhirnya tercapai lewat kombinasi LFI + Command Injection (webshell). RFI di-skip (`allow_url_include` off default). **Generalisasi rule Command Injection**: auditd (`100300`) confirmed generalisasi (deteksi di layer proses OS), Suricata (`1000003`) **tidak** generalisasi (scope-nya spesifik POST body, LFI lewat GET gak match — butuh rule tambahan) |
 
 Detail lengkap tiap lab (payload, step-by-step, GIF evidence) ada di `Labs/web-server-attack/[nama-lab]/README.md`.
 
