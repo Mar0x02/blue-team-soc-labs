@@ -1,0 +1,43 @@
+<!-- Local rules -->
+<!-- Modify it at your will. -->
+
+<!--
+CSP Report-Only violation detection (Stored XSS replay blind spot).
+Referensi: Infrastructure/web-server-csp-setup.md, Labs/web-server-attack/xss/stored/README.md
+Gak butuh custom decoder - log_format "json" di ossec.conf bikin Wazuh auto-extract
+semua field dari /var/log/csp-reports.log lewat JSON decoder bawaan.
+-->
+
+<group name="csp,xss,">
+
+  <rule id="100403" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="violated_directive" type="pcre2">.*</field>
+    <description>CSP violation report received</description>
+  </rule>
+
+  <rule id="100404" level="10">
+    <if_sid>100403</if_sid>
+    <field name="violated_directive">script-src-elem</field>
+    <description>CSP Report-Only: inline script diblokir di $(document_uri) baris $(line_number), sample: $(script_sample) - indikasi Stored XSS aktif</description>
+    <mitre>
+      <id>T1059.007</id>
+    </mitre>
+  </rule>
+
+  <rule id="100405" level="3">
+    <if_sid>100403</if_sid>
+    <field name="violated_directive">script-src-attr</field>
+    <description>CSP Report-Only: inline event handler diblokir di $(document_uri), sample: $(script_sample)</description>
+  </rule>
+
+  <rule id="100406" level="10">
+    <if_sid>100405</if_sid>
+    <field name="script_sample" type="pcre2">alert\(|document\.cookie|eval\(|fetch\(</field>
+    <description>CSP Report-Only: inline event handler dengan pattern mencurigakan ($(script_sample)) di $(document_uri) - indikasi attribute-based XSS</description>
+    <mitre>
+      <id>T1059.007</id>
+    </mitre>
+  </rule>
+
+</group>

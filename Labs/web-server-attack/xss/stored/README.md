@@ -137,3 +137,64 @@ Ini **membuktikan hipotesis** yang udah ditulis di awal lab ini: gak ada versi "
 Beda sama Reflected XSS (satu siklus request-response, desain deteksi `access.log` generalisasi tanpa masalah) dan beda juga sama Command Injection (blind spot-nya soal method POST yang gak ke-log, tapi tetap bisa ketutup begitu ada data source baru kayak NIDS), Stored XSS ngasih tau ada **jenis blind spot ketiga yang lebih fundamental**: momen replay itu **secara struktural gak punya bahan mentah buat dideteksi** oleh layer manapun yang berbasis analisa *request* — baik log aplikasi (`access.log`), maupun NIDS (Suricata). Nambah data source baru (kayak yang berhasil nutup gap Command Injection) gak otomatis nutup gap ini, karena masalahnya bukan "datanya gak sampai ke SIEM", tapi "datanya emang gak pernah ada di jalur request sama sekali".
 
 Satu-satunya jalur yang punya potensi nutup blind spot ini adalah sinyal dari **sisi browser korban sendiri** (misalnya CSP violation report) — bukan dari analisa traffic/log di sisi server. Rencana selanjutnya: coba setup **CSP `Report-Only`** di Web-Server ([`web-server-csp-setup.md`](../../../../Infrastructure/web-server-csp-setup.md)) dan lihat apakah report violation-nya beneran bisa ke-forward sampai jadi alert di Wazuh.
+
+---
+
+## Remediasi — CSP Report-Only Menutup Blind Spot Replay
+
+Setelah **CSP `Report-Only`** ([`web-server-csp-setup.md`](../../../../Infrastructure/web-server-csp-setup.md)) dan custom Wazuh rule ([`csp-report-rules.xml`](../../../../Detection-Engineer/wazuh-rules/csp-report-rules.xml)) selesai diimplementasi, momen **replay** yang sebelumnya confirmed blind spot di-replay ulang buat mastiin blind spot itu beneran ketutup.
+
+### Data Guestbook Saat Test
+
+![Isi tabel guestbook di database](asset/db-data.png)
+
+4 entry di guestbook, 3 di antaranya mengandung XSS:
+
+| `comment_id` | `comment` | Kategori |
+|---|---|---|
+| 1 | `Hello admin` | Benign |
+| 2 | `<script>alert('nice')</script>` | XSS (`<script>` tag) |
+| 3 | `<script>alert('nice')</script>` (duplikat) | XSS (`<script>` tag) |
+| 4 | `<img src="x.com" onerror="alert(1)">` | XSS (attribute-based, `onerror`) |
+
+### Ubuntu Host Buka Halaman Guestbook (Replay)
+
+![Ubuntu Host buka halaman xss_s yang guestbook-nya udah kena stored XSS](asset/06-replay-open-page-csp-enabled.gif)
+
+Ubuntu Host (`10.10.20.30`) buka `vulnerabilities/xss_s/` — persis skenario replay di awal lab ini: **gak ngirim payload apapun**, cuma `GET` polos ke halaman yang guestbook-nya udah ke-tempelin 3 entry XSS di atas.
+
+![Alert mulai bermunculan di Wazuh Dashboard](asset/07-wazuh-dashboard-csp-alerts.gif)
+
+Beberapa detik kemudian, alert mulai muncul di Wazuh Dashboard — **momen yang sebelumnya total silent** (lihat [Momen Replay](#momen-replay-ubuntu-host--blind-spot-confirmed) di atas).
+
+### Alert yang Muncul (Urut Waktu)
+
+| Waktu | Rule | Level | `violated_directive` | Detail | Kategori |
+|---|---|---|---|---|---|
+| `16:27:19` | `100404` | 10 | `script-src-elem` | `line_number: 95`, sample `alert('nice')` | ✅ XSS — entry `comment_id 2/3` |
+| `16:27:21` | `100406` | 10 | `script-src-attr` | sample `alert(1)` | ✅ XSS — entry `comment_id 4` (`onerror`) |
+| `16:27:21` | `31101` (default Wazuh) | 5 | — | `access.log`: `GET /vulnerabilities/xss_s/x.com` → `404` | ✅ XSS — efek samping `<img src="x.com">`, ke-detect lewat jalur **beda total** (access.log, bukan CSP) |
+| `16:27:47` | `100405` | 3 | `script-src-attr` | sample `javascript:toggleTheme();` | ⚪ Noise — fungsi DVWA legit |
+| `16:27:47` | `100404` | 10 | `script-src-elem` | `line_number: 94`, sample `alert('nice')` | ✅ XSS — entry `comment_id 2/3` (baris satunya) |
+| `16:27:47` | `100405` | 3 | `script-src-attr` | sample `return confirmClearGuestbook();` | ⚪ Noise — fungsi DVWA legit |
+
+`client_ip` di **semua** alert `100404`/`100405`/`100406` di atas adalah `10.10.20.30` — Ubuntu Host, aktor yang sama yang di section [Momen Replay](#momen-replay-ubuntu-host--blind-spot-confirmed) requestnya **sama sekali gak ninggalin jejak**. Sekarang browser-nya sendiri yang jadi sumber sinyal, independen dari isi request yang dia kirim.
+
+### Signal vs Noise
+
+Confirmed 3 entry XSS di guestbook (2x `<script>`, 1x `onerror`) menghasilkan **3 sinyal XSS yang tervalidasi** (`100404` x2 buat 2 baris `<script>` yang identik tapi beda posisi, `100406` buat entry `onerror`), plus **1 bonus detection** dari mekanisme yang sama sekali independen (`31101`, default Wazuh rule buat `access.log`, ke-trigger karena browser nyoba nge-*load* `<img src="x.com">` sebagai resource beneran dan gagal 404). Dua baris `<script>` yang identik (`comment_id 2` dan `3`) masing-masing ke-report terpisah dengan `line_number` beda (`94` dan `95`), match sama posisi masing-masing di HTML yang di-*render*.
+
+Di sela itu, 2x alert `100405` (level 3) adalah **noise yang disengaja** — fungsi bawaan DVWA (`toggleTheme`, `confirmClearGuestbook`) yang emang selalu ke-flag CSP karena sama-sama inline handler, gak ada hubungannya sama payload attacker. Ini trade-off yang diambil sadar: tujuan alerting-nya adalah **jangan sampai ada yang kelewat** (recall tinggi), walaupun konsekuensinya nambah noise kalau makin banyak inline handler legit di halaman — makanya level-nya sengaja dibedain jauh (`3` buat generic attr, `10` buat yang match pattern mencurigakan di `script_sample`), biar analis bisa filter tanpa kehilangan visibility.
+
+### Kesimpulan Remediasi
+
+**Blind spot replay yang confirmed di awal lab ini sekarang ketutup.** Bukan lewat nambah rule di layer yang sama (request-based), tapi lewat nambah **data source dari layer yang sepenuhnya baru**: sinyal dari sisi browser korban sendiri (CSP violation report), yang secara desain independen dari ada/gaknya payload di request. Ini konsisten sama pola yang udah kebukti dua kali sebelumnya (Command Injection ketutup pakai auditd + Suricata) — begitu satu layer analisa (request-based) kehabisan bahan mentah, solusinya bukan nambah rule lagi di layer yang sama, tapi nyari **titik observasi baru** yang punya akses ke informasi yang sebelumnya emang gak pernah lewat jalur manapun yang kepantau.
+
+### Perbandingan: Sebelum vs Sesudah
+
+| Cek | Sebelum (lab awal) | Sesudah (remediasi) |
+|---|---|---|
+| Momen injeksi (Kali submit payload) ke-detect? | ✅ Ya — Suricata `SID 1000004` → Wazuh `100400` | ✅ Tetap (gak berubah, remediasi ini fokus ke momen replay) |
+| Momen replay (Ubuntu Host buka halaman) ke-detect? | ❌ **Tidak sama sekali** — gak ada string mencurigakan di request | ✅ Ya — CSP Report-Only `100404`/`100406`, independen dari isi request |
+| Bisa tau *entry mana* yang jadi sumber XSS? | ❌ Tidak — cuma tau "ada percobaan XSS" | ✅ Ya — `script_sample` + `line_number` nunjuk balik ke entry spesifik |
+| Attacker pake vektor `<script>` tag maupun attribute (`onerror`)? | Sama-sama gak ke-detect pas replay | ✅ Dua-duanya ke-detect (`script-src-elem` dan `script-src-attr` dua-duanya di-cover) |
