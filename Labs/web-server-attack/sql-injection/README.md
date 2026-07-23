@@ -200,7 +200,7 @@ Cara bacanya: cek log yang udah ke-decode sebagai `web-accesslog`, cari pattern 
 - Percobaan pertama pakai ID `100200` **gak pernah ke-trigger** walau syntax rule valid dan `wazuh-analysisd -t` gak nunjukin error — sempet dicurigai konflik `decoded_as` vs base rule `31100` (rule default yang juga anchor ke decoder `web-accesslog`), tapi setelah ganti ke ID baru (`100203`) yang belum pernah dipake sebelumnya, rule langsung jalan. Kemungkinan ada residual state dari histori edit-restart berkali-kali yang nempel ke ID lama.
 - Divalidasi pakai `wazuh-logtest` (bukan cuma attack beneran + cek dashboard) — cara ini lebih cepat buat isolasi masalah karena langsung nunjukin decoder + rule yang match tanpa perlu generate traffic asli.
 
-**Status:** rule `100203` udah confirmed jalan (muncul di `wazuh-logtest` buat payload `GROUP BY`). Rule tambahan buat pattern lain (`ORDER BY`, `AND`/`OR`, tier exploitation/exfiltration) menyusul bertahap.
+**Status:** rule `100203` udah confirmed jalan (muncul di `wazuh-logtest` buat payload `GROUP BY`) — cukup sebagai deliverable buat nutup blind spot fase recon SQLi di lab ini. Pattern lain (`ORDER BY`, `AND`/`OR`, tier exploitation/exfiltration) bisa ditambah belakangan kalau dibutuhin, di luar scope lab ini.
 
 ---
 

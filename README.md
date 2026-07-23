@@ -83,6 +83,9 @@ Seluruh 5 endpoint victim (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) sudah p
 | **SQL Injection** | ✅ Done | Default ruleset (`31106`) gak detect fase recon (`'`, `ORDER BY`); severity gak proporsional antara recon vs data exfiltration; custom Wazuh rule lagi dibangun bertahap |
 | **Command Injection** | ✅ Done | Command tereksekusi penuh (RCE, sampai arbitrary file write) + **reverse shell** (LOLBin: `sh`+`nc`+`mkfifo`); request **POST** gak ninggalin jejak payload di `access.log`, dan proses/koneksi reverse shell gak ke-detect sama sekali walau keliatan di `htop` — blind spot total, jadi basis penambahan **NIDS + auditd**. **Remediasi confirmed**: replay skenario yang sama sekarang ke-detect via auditd (rule `100300`) + Suricata custom rule (`100400`/SID `1000003`) |
 | **File Inclusion (LFI)** | ✅ Done | Path traversal ke `/etc/passwd` berhasil & ke-detect (`31106`); log poisoning gagal (`Permission denied`, tapi tetap ke-log); RCE akhirnya tercapai lewat kombinasi LFI + Command Injection (webshell). RFI di-skip (`allow_url_include` off default). **Generalisasi rule Command Injection**: auditd (`100300`) confirmed generalisasi (deteksi di layer proses OS), Suricata (`1000003`) **tidak** generalisasi (scope-nya spesifik POST body, LFI lewat GET gak match — butuh rule tambahan) |
+| **XSS (Reflected → Stored → DOM)** | ✅ Done | Reflected: rule `31105`/`31106` ke-detect langsung. Stored: blind spot **replay** ketemu (server gak pernah tau ada payload aktif pas visitor lain buka halaman) — ditutup pake **CSP Report-Only** (browser ngirim violation report independen dari request awal). DOM: fragment (`#...`) gak otomatis exploitable, cuma jalan lewat kombinasi reload+query string, dan request ke server tetap 100% bersih. **Gap detection engineering**: rule CSP `100404` awalnya asumsi "`script-src-elem` = selalu high-confidence", ternyata false positive 100% di modul yang punya inline `<script>` legit sendiri — di-tuning jadi kombinasi blocklist (`100407`) + allowlist (`100408`) |
+| **JavaScript Attacks** | 🔄 In Progress | Modul token-based client-side "trust" (bukan injection) — token generation pake **ROT13** sebagai salah satu step. Hipotesis: bypass bisa dilakuin tanpa browser sama sekali (replikasi logic di script), fokus deteksi ke **behavioral** (browser asli vs automation) bukan payload content |
+| **File Upload** | 🔄 In Progress | Rencana upload webshell **b374k** (Security Level `Low`, gak ada validasi). Buka permukaan deteksi baru yang belum pernah dites: **FIM/syscheck** (belum di-setup) buat nangkep file baru muncul di direktori upload, plus validasi generalisasi auditd (`100300`) ke vektor baru |
 
 Detail lengkap tiap lab (payload, step-by-step, GIF evidence) ada di `Labs/web-server-attack/[nama-lab]/README.md`.
 
@@ -92,11 +95,14 @@ Detail lengkap tiap lab (payload, step-by-step, GIF evidence) ada di `Labs/web-s
 
 | Komponen | Status | Keterangan |
 | :--- | :---: | :--- |
-| Integrasi Wazuh → Ollama (alert forwarding) | ⏳ Pending | Alert dari SIEM diteruskan ke AI (M1) buat auto-triage/summary |
-| Detection Engineering — Custom Wazuh Rules | 🔄 In Progress | Nutup gap di default ruleset Wazuh (fase recon SQLi) — disimpan di `Detection-Engineer/wazuh-rules/` |
+| Detection Engineering — Custom Wazuh Rules (SQLi recon) | ✅ Done | Rule `100203` (`GROUP BY` probing) confirmed jalan, nutup blind spot fase recon SQLi — lihat [`sql-injection/README.md`](./Labs/web-server-attack/sql-injection/README.md#custom-detection-rule) |
 | NIDS — Suricata di pfSense | ✅ Done | Engine + decoder/rule Wazuh + custom rule (SID `1000001`, `1000003`) confirmed alert end-to-end dari payload command injection asli — lihat [`pfsense-suricata-setup.md`](./Infrastructure/pfsense-suricata-setup.md) |
 | auditd — Linux Audit Framework di Web-Server | ✅ Done | Nutup blind spot process execution/LOLBin (`sh`, `nc`, `mkfifo`) — custom rule `100300` confirmed alert end-to-end di Wazuh Dashboard, lihat [`web-server-auditd-setup.md`](./Infrastructure/web-server-auditd-setup.md) |
 | Reverse Shell (lanjutan Command Injection) | ✅ Done | Berhasil dapet shell interaktif via LOLBin (mkfifo + nc); confirmed gak ke-detect Wazuh sama sekali (proses maupun koneksi network) |
+| CSP Report-Only + Custom Wazuh Rule (`100403`-`100408`) | ✅ Done | Nutup blind spot XSS replay & DOM XSS fragment lewat browser-side violation reporting — lihat [`web-server-csp-setup.md`](./Infrastructure/web-server-csp-setup.md) |
+| FIM/syscheck — File Integrity Monitoring di Web-Server | ⏳ Pending | Belum di-setup — dibutuhin buat lab File Upload (nangkep file baru di direktori upload) |
+| **Simulasi Full Attack Chain** (initial access → privesc → recon → lateral movement → exfiltration) | ⏳ Pending | Direncanain jadi lab penutup web-server, dari `www-data` sampai objective akhir. Analisis timeline lengkap manual lewat Wazuh Dashboard sebelum lanjut ke AI+RAG |
+| Integrasi Wazuh → Ollama (alert forwarding) + AI+RAG | ⏳ Pending | Setelah full attack chain — biar diuji ke insiden multi-stage yang kompleks, bukan cuma satu alert lab kecil |
 
 ---
 
