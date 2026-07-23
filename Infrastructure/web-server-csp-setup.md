@@ -133,9 +133,13 @@ sudo systemctl restart wazuh-manager
 ```
 
 Logic rule-nya:
-- `100404` (`script-src-elem`, level `10`) — pelanggaran dari tag `<script>` beneran, selalu high-confidence karena browser bisa pinpoint `line_number`-nya
+- `100404` (`script-src-elem`, level `3`) — pelanggaran dari tag `<script>` beneran, level rendah dulu (bukan `10` lagi — lihat catatan tuning di bawah)
 - `100405` (`script-src-attr`, level `3`) — pelanggaran dari inline event handler (`onclick=`, `onerror=`, dst), gak pernah ada `line_number` (limitasi browser, bukan indikator benign/malicious) — level rendah dulu, `script_sample` ditampilin di description buat triage manual
 - `100406` (level `10`) — eskalasi dari `100405` kalau `script_sample` match pattern mencurigakan (`alert(`, `document.cookie`, dst), nutup celah attacker yang pake vektor attribute-based (bukan `<script>` tag)
+- `100407` (level `10`) — eskalasi dari `100404` **(blocklist)**: kalau `script_sample` match pattern mencurigakan yang sama kayak `100406`, nutup celah attacker yang pake vektor `<script>` tag beneran
+- `100408` (level `10`) — eskalasi dari `100404` **(allowlist)**: kalau `script_sample` **BUKAN** cocok sama snippet kode bawaan modul yang dikenal (`negate="yes"` di field match) — nangkep payload yang lolos dari daftar keyword `100407` (misal di-obfuscate) selama kontennya emang beda dari kode legit yang udah dikenal
+
+> **Update — tuning dari lab [DOM XSS](../Labs/web-server-attack/xss/dom/README.md#opsi-perbaikan-rule-100404):** `100404` awalnya didesain level `10` dengan asumsi "`script-src-elem` = selalu high-confidence" (browser bisa pinpoint `<script>` tag beneran). Asumsi ini valid di lab Stored XSS (guestbook gak punya inline `<script>` legit), tapi ternyata gak generalisasi — modul DOM XSS DVWA sendiri pake inline `<script>` legit buat fungsi dropdown bahasanya, jadi `100404` versi lama fire di **setiap** page load modul itu, attack atau bukan. Diturunin ke level `3` (mirror `100405`), dan eskalasinya dipecah jadi dua rule independen: `100407` (blocklist, pola sama kayak `100406`) dan `100408` (allowlist, ngebalik logic-nya jadi "curiga kalau BEDA dari kode legit yang dikenal" — lebih tahan ke payload yang di-obfuscate, tapi lebih rentan false positive kalau kode legit-nya berubah).
 
 > **Belum divalidasi `wazuh-logtest`** — Wazuh Manager (Dell) lagi gak available. Data sample yang udah dikumpulin manual dari `archives.log` (elem+`alert('nice')`, attr+3 fungsi DVWA legit, attr+`alert(1)`) dipakai buat verifikasi begitu Dell nyala lagi.
 

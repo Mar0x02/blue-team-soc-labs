@@ -157,4 +157,29 @@ Sesuai dugaan:
    Rule-nya **sama persis** buat dua kasus yang beda total secara intent. Root cause: `100404` cuma ngecek `violated_directive == script-src-elem` tanpa liat isi `script_sample` — asumsi "`script-src-elem` = selalu high-confidence" ini valid di lab Stored XSS (guestbook gak punya inline `<script>` legit apapun buat dibandingin), tapi runtuh begitu ketemu modul yang source code aslinya sendiri pake inline `<script>` tag buat fungsi legit.
 4. Satu-satunya pembeda yang masih valid dari data ini adalah isi `script_sample` (dan kadang `line_number`) — persis pola yang udah dipakai `100406` buat eskalasi `100405` berdasarkan konten mencurigakan. `100404` belum punya mekanisme serupa.
 
+### Opsi Perbaikan Rule `100404`
+
+Ada dua level pendekatan buat nutup false positive ini, beda layer dan beda trade-off:
+
+1. **Content-based tuning di rule SIEM** — kerjaan di sisi **detection**, gak nyentuh app/target sama sekali. Cocok buat kasus kayak DVWA yang emang sengaja vulnerable dan gak realistis buat "dibenerin" source-nya. Ini yang diimplementasi di lab ini (detail di bawah).
+2. **CSP nonce/hash allowlisting di level policy app** — tiap inline script yang legit dikasih nonce/hash unik lewat pipeline CI/CD pas deploy, jadi `script-src 'self'` gak perlu nge-block semua inline script secara buta. Begitu di-setup, **violation apapun yang lolos otomatis jadi sinyal yang valid**, dan SOC gak perlu re-tuning manual tiap ada fitur baru — tanggung jawabnya pindah ke proses build/deploy (DevSecOps), bukan reaktif di SIEM. Gak applicable ke DVWA di lab ini karena butuh akses ke source/pipeline app-nya.
+
+**Implementasi opsi 1** — `100404` diturunin dari level `10` ke `3` (base, mirror `100405`), eskalasinya dipecah jadi **dua rule independen**, gak cuma satu:
+
+- **`100407` (blocklist)** — eskalasi ke level `10` kalau `script_sample` match daftar keyword mencurigakan (`alert(`, `document.cookie`, `eval(`, `fetch(`), pola yang sama kayak `100406` buat `100405`.
+- **`100408` (allowlist)** — eskalasi ke level `10` kalau `script_sample` **BUKAN** cocok sama snippet kode bawaan modul yang udah dikenal (`if (document.location.href.indexOf...`), pake `negate="yes"` di field match Wazuh.
+
+Alasan gabung dua-duanya: blocklist doang rawan attacker ngindarin daftar keyword lewat obfuscation (`alert`, base64, dst) — payload yang lolos tetap nempel di level `3` dan gampang kelewat. Allowlist nutup celah itu (curiga kalau BEDA dari kode legit yang dikenal, gak peduli teknik obfuscation-nya apa), tapi allowlist sendiri lebih rapuh kalau kode legit-nya berubah dikit aja (whitespace, komentar, dst) — makanya dua-duanya dijalanin bareng, saling nutup kelemahan masing-masing.
+
+Trade-off yang tetap ada: kombinasi ini tetap heuristik, bukan solusi sekali jadi — `100407` butuh update daftar keyword kalau ada teknik baru, dan `100408` butuh update pattern allowlist kalau developer ubah kode legit-nya. Solusi yang bener-bener nutup masalah dari akar tetap opsi 2 (nonce/hash), tapi itu di luar scope lab ini.
+
+**Validasi tuning:**
+
+![Rule 100404 tuning tervalidasi](./asset/06-rule-100404-tuning-validated.png)
+
+- **Baseline** (`if (document.location.href.indexOf…`, kode legit) — fire di `100404`, **level 3**. Dibandingkan sama alert lama sebelum tuning (level 10, timestamp lebih awal) di dashboard yang sama, konfirmasi severity-nya beneran turun.
+- **Attack** (payload beneran, misal `?default=<script>alert('test')</script>`) — escalate ke **level 10** lewat `100407`/`100408`, sesuai desain.
+
+Kombinasi tuning ini berhasil: kode legit gak lagi bikin alert fatigue di severity tertinggi, tapi payload attacker beneran tetap ke-flag high-confidence.
+
 > **Kesimpulan seri XSS (Reflected → Stored → DOM):** tiap lab nutup satu lapis blind spot yang beda — Reflected ngajarin baseline signature detection, Stored ngajarin blind spot **replay** (butuh CSP buat nutup, karena server gak pernah tau ada payload aktif), dan DOM ngajarin dua hal sekaligus: (a) fragment tetap bisa jadi blind spot nyata walau jalan masuknya gak selurus hipotesis awal, dan (b) detection layer yang dibangun buat kasus spesifik (CSP `100404` buat Stored XSS) bisa bawa asumsi yang gak generalisasi ke modul lain — butuh divalidasi ulang tiap kali dipakai di konteks baru.
