@@ -34,7 +34,7 @@ sudo nano /etc/apache2/sites-available/000-default.conf
 ```apache
 <VirtualHost *:80>
     ...
-    <LocationMatch "^/vulnerabilities/xss_s/">
+    <LocationMatch "^/vulnerabilities/(xss_s|xss_d)/">
         Header set Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'report-sample'; report-uri /csp-report.php"
     </LocationMatch>
 </VirtualHost>
@@ -44,7 +44,9 @@ sudo nano /etc/apache2/sites-available/000-default.conf
 
 `'report-sample'` ditambahin biar browser nyertain field `script-sample` di report — potongan kode yang kena block (di-truncate ~40 karakter sama browser demi keamanan, tapi cukup buat identifikasi payload-nya). Tanpa keyword ini, report cuma kasih tau *ada* pelanggaran, gak kasih tau *isinya* apa.
 
-**Kenapa `<LocationMatch>`, bukan langsung di level `<VirtualHost>`:** kalau header-nya dipasang site-wide, CSP bakal ke-trigger di **halaman DVWA manapun** yang punya inline script/handler (DVWA sendiri sering pake ini buat UI-nya) — noise yang gak relevan sama sekali buat lab ini. Scope ke `/vulnerabilities/xss_s/` doang bikin report yang masuk **cuma dari halaman yang emang lagi diuji**.
+**Kenapa `<LocationMatch>`, bukan langsung di level `<VirtualHost>`:** kalau header-nya dipasang site-wide, CSP bakal ke-trigger di **halaman DVWA manapun** yang punya inline script/handler (DVWA sendiri sering pake ini buat UI-nya) — noise yang gak relevan sama sekali buat lab ini. Scope ke path yang emang lagi diuji doang bikin report yang masuk **cuma dari halaman yang relevan**.
+
+> **Update 2026-07-23:** pattern `(xss_s|xss_d)` nambahin `/vulnerabilities/xss_d/` buat persiapan lab [DOM XSS](../Labs/web-server-attack/xss/dom/README.md) — validasi apakah CSP tetep bisa nangkep violation walau payload-nya dikirim lewat URL fragment (`#...`) yang gak pernah lewat network sama sekali.
 
 ```bash
 sudo apache2ctl configtest
