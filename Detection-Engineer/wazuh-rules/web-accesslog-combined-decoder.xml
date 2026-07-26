@@ -1,0 +1,41 @@
+<!-- Local decoders -->
+<!-- Modify it at will. -->
+
+<!--
+Sibling decoder ke root "web-accesslog" bawaan Wazuh - genuinely ADDITIVE,
+gak nyentuh/exclude built-in sama sekali.
+Referensi: Labs/web-server-attack/javascript-attacks/README.md,
+Detection-Engineer/wazuh-rules/javascript-attack-rules.xml
+
+KUNCI yang kelewatan di semua percobaan sebelumnya: sibling decoder itu
+MATCH MANDIRI dari awal baris log (prematch + regex sendiri, lengkap),
+BUKAN nyambung dari sisa match parent lewat offset="after_parent". Built-in
+sendiri gak butuh "nyambung" - tiap sibling (web-accesslog-domain,
+web-accesslog-ip-ip, web-accesslog-ip, web-accesslog-glpi) match independen
+dari nol, hasilnya di-merge ke satu event.
+
+Histori troubleshooting (kenapa gak dari awal begini):
+1-2. Coba <parent>web-accesslog</parent> + offset="after_parent" (2x, beda
+   regex): gagal, karena keliru asumsi sibling harus "nyambung" dari parent.
+   Root gak punya <regex> sendiri (cuma prematch/program_name), jadi posisi
+   after_parent gak jelas/gak konsisten.
+3. <parent>web-accesslog-ip</parent> (child, bukan root): "Parent decoder
+   name invalid" - Wazuh gak izinin decoder yang parent-nya sendiri child
+   ("grandchild"), konfirmed gak peduli satu file atau beda file.
+4. Full replace + decoder_exclude: KERJA, tapi lossy (kehilangan varian
+   domain/2-IP/glpi) dan butuh exclude built-in.
+
+Fix final (paling minimal & aman): sibling MANDIRI, regex lengkap dari awal
+baris log (gak pake offset sama sekali), <parent>web-accesslog</parent> valid
+karena root ini di-reference by name (cross-file ke root always works,
+terbukti berkali-kali - masalah cuma ada di offset/grandchild, bukan di
+cross-file root reference itu sendiri).
+-->
+
+<decoder name="web-accesslog-custom-js-attack">
+  <type>web-log</type>
+  <parent>web-accesslog</parent>
+  <prematch type="pcre2">^\S+ \S+ \S+ \[[^\]]+\] "\S+ \S+ \S+"</prematch>
+  <regex type="pcre2">^(\S+) \S+ \S+ \[[^\]]+\] "(\S+) (\S+) \S+" (\d+) (\d+|-) "([^"]*)" "([^"]*)"$</regex>
+  <order>srcip, protocol, url, id, size, referer, user_agent</order>
+</decoder>
