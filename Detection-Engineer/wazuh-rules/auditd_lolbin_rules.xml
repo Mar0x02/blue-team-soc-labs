@@ -1,15 +1,35 @@
 <!-- Local rules -->
 <!-- Modify it at your will. -->
 
+<!--
+2026-08-04 — Tiering severity (sebelumnya blanket level 12 buat SEMUA command www-data).
+Ditemukan di lab Full Attack Chain (Labs/web-server-attack/full-attack-chain/README.md,
+Analisis Insiden Event 3): command recon/informational (ls, id, ps, uname, dst) ke-alert
+di level yang sama persis dengan command yang genuinely berbahaya (su, sudo, wget, exploit
+binary) — bikin analyst yang filter dashboard by severity gak bisa bedain noise dari sinyal
+kritis. Dipecah jadi 2 tier: 100300 (default, informational) dan 100301 (child rule,
+escalate ke level 12 kalau command match daftar high-impact).
+-->
+
 <group name="auditd,lolbin,command_injection,">
 
-  <rule id="100300" level="12">
+  <rule id="100300" level="7">
     <if_sid>80700</if_sid>
     <field name="audit.key">www_data_exec</field>
     <description>LOLBin: www-data (Apache) menjalankan proses baru "$(audit.command)" - indikasi command injection</description>
     <mitre>
       <id>T1059</id>
     </mitre>
+  </rule>
+
+  <rule id="100301" level="12">
+    <if_sid>100300</if_sid>
+    <field name="audit.command" type="pcre2">^(sh|bash|dash|ksh|zsh|perl|python|python2|python3|ruby|php|node|nodejs|gcc|cc|nc|ncat|netcat|socat|wget|curl|tftp|su|sudo|chmod|chown|mysql|mysqldump|psql|mkfifo|unshare|setcap)$</field>
+    <description>LOLBin: www-data (Apache) menjalankan proses berbahaya "$(audit.command)" - indikasi command injection tingkat tinggi (shell/interpreter/network fetch/credential access/privesc)</description>
+    <mitre>
+      <id>T1059</id>
+    </mitre>
+    <group>high_impact,</group>
   </rule>
 
 </group>

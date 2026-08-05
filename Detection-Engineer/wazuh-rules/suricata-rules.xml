@@ -28,4 +28,45 @@
     <group>xss,</group>
   </rule>
 
+  <!-- ID lompat ke 100409 buat hindarin collision sama range 100403-100408 (csp-report-rules.xml) -->
+  <rule id="100409" level="12">
+    <if_sid>100400</if_sid>
+    <field name="suricata.sid" type="pcre2">:1000005:</field>
+    <description>Suricata NIDS: Web-Server inisiasi outbound HTTP request ke external host - indikasi C2/payload staging</description>
+    <mitre>
+      <id>T1105</id>
+    </mitre>
+    <group>c2,egress,</group>
+  </rule>
+
+  <rule id="100410" level="10">
+    <if_sid>100400</if_sid>
+    <field name="suricata.sid" type="pcre2">:1000006:</field>
+    <description>Suricata NIDS: Ekstensi file eksekutabel (.php/.phtml/.phar/.pht) terdeteksi di multipart upload - indikasi webshell upload</description>
+    <mitre>
+      <id>T1505.003</id>
+    </mitre>
+    <group>webshell,file_upload,</group>
+  </rule>
+
+  <rule id="100411" level="12">
+    <if_sid>100400</if_sid>
+    <field name="suricata.sid" type="pcre2">:1000007:</field>
+    <description>Suricata NIDS: Signature fungsi webshell umum (eval/system/shell_exec/dst) terdeteksi TANPA obfuscation di body upload - konfirmasi tambahan webshell upload</description>
+    <mitre>
+      <id>T1505.003</id>
+    </mitre>
+    <group>webshell,file_upload,</group>
+  </rule>
+
+  <rule id="100412" level="12">
+    <if_sid>100400</if_sid>
+    <field name="suricata.sid" type="pcre2">:1000008:</field>
+    <description>Suricata NIDS: Web-Server buka koneksi TCP outbound ke port non-web di external host - indikasi raw reverse shell (netcat-style)</description>
+    <mitre>
+      <id>T1059.004</id>
+    </mitre>
+    <group>c2,egress,reverse_shell,</group>
+  </rule>
+
 </group>
