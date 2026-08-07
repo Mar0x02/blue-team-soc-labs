@@ -47,3 +47,6 @@ AI-Rag-Integration/data/rules/
 AI-Rag-Integration/data/cvelistV5/
 AI-Rag-Integration/data/cti/
 AI-Rag-Integration/data/thm/
+
+# output files
+out/

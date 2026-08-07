@@ -79,3 +79,18 @@ alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"LOCAL Common webshell fu
 # `threshold` dipasang biar gak flood satu alert per paket sepanjang sesi shell interaktif
 # yang bisa berjam-jam — cukup 1 alert per source per 5 menit buat kasih sinyal ke analyst.
 alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET !$HTTP_PORTS (msg:"LOCAL Outbound TCP connection from web server to external host on non-web port - possible raw reverse shell"; flow:to_server,established; threshold:type limit, track by_src, count 1, seconds 300; classtype:trojan-activity; sid:1000008; rev:1;)
+
+# 2026-08-06 — Exception buat false positive di rule 1000008 (lab Full Attack Chain,
+# setup n8n alerting pipeline): rule 1000008 nangkep SEMUA koneksi TCP keluar dari
+# Web-Server ke port non-web di luar $HOME_NET — termasuk trafik LEGIT Wazuh Agent
+# (Web-Server) -> Wazuh Manager (Dell) di port 1514/1515, karena Dell posisinya di
+# luar pfSense (di luar $HOME_NET, otomatis kehitung $EXTERNAL_NET).
+#
+# `pass` diproses dengan prioritas di atas `alert` buat packet yang sama (independen
+# dari urutan rule di file ini) — jadi trafik yang match rule ini gak bakal ke-alert
+# lagi sama rule 1000008 di atas, walau posisinya duluan.
+#
+# $SIEM_HOST didefinisikan di pfSense (Services > Suricata > Interfaces > LAN1 >
+# Variables), BUKAN hardcode IP Dell literal di sini — konsisten sama pola
+# $HTTP_SERVERS/$EXTERNAL_NET yang juga resolve dari luar file rule.
+pass tcp $HTTP_SERVERS any -> $SIEM_HOST [1514,1515] (msg:"PASS Wazuh agent to manager traffic - known good egress"; flow:to_server,established; sid:1000009; rev:1;)
