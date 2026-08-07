@@ -1,0 +1,195 @@
+{
+  "name": "SOC Lab",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "wazuh-alert",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -528,
+        32
+      ],
+      "id": "91525d44-3e09-4207-8a4d-b86642e2bbf4",
+      "name": "Webhook",
+      "webhookId": "16c40376-d2ab-4bf9-b59c-89718cb54043"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.43.193:8000/triage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"rule\": {{ JSON.stringify($json.rule) }},\n  \"agent\": {\"name\":\"{{$json.agent.name}}\"},\n  \"enriched_summary\": \"{{ $json.enriched_summary }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        128,
+        -64
+      ],
+      "id": "42aef7b7-4364-4c4d-b564-198ec3271e51",
+      "name": "AI + RAG Triage"
+    },
+    {
+      "parameters": {
+        "project": {
+          "__rl": true,
+          "value": "10001",
+          "mode": "list",
+          "cachedResultName": "CyberSecurity Lab"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "10007",
+          "mode": "list",
+          "cachedResultName": "Task"
+        },
+        "summary": "={{ $json.rule.description }}",
+        "additionalFields": {
+          "description": "=Agent: \"{{ $json.agent.name }}\"\nLevel: {{ $json.rule.level }}\nRule ID: {{ $json.rule.id }}\n{{ $json.enriched_summary }}\n{{ $json.triage }}",
+          "priority": {
+            "__rl": true,
+            "mode": "id",
+            "value": "={{ $json.jira_priority }}",
+            "__regex": "^([0-9]{1,})"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        528,
+        -64
+      ],
+      "id": "12beb862-280a-4171-95e4-9182f9138969",
+      "name": "Ticketing Jira",
+      "credentials": {
+        "jiraSoftwareCloudApi": {
+          "id": "zpA5914uj7CJAI7K",
+          "name": "Jira SW Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/webhooks/1534243327615041546/OTLWHrBEDa4vWM6i8jMgLCJMOuuNadmWguwbc5dCTF8EKH1653jaowAcHoiFqXtHEmPI",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "=🚨 [Wazuh] {{ $json.date }} at {{ $json.time }} {{ $json.rule.description }} - level {{ $json.rule.level }} - agent {{ $json.agent.name }} {{ $json.enriched_summary }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        128,
+        144
+      ],
+      "id": "e4c11461-0a3b-4e2d-861d-03f882c29004",
+      "name": "Push Notification Discord"
+    },
+    {
+      "parameters": {
+        "jsCode": "const alert = $input.item.json.body || {};\n\nconst data = alert.data || {};\n\nlet details = [];\n\nconst srcip = data.srcip || data.src_ip;\nconst dstip = data.dstip || data.dst_ip;\nif (srcip) {\n  const sport = data.src_port ? ':' + data.src_port : '';\n  const dportVal = data.dest_port || data.dst_port;\n  const dport = dportVal ? ':' + dportVal : '';\n  details.push(`Network: ${srcip}${sport} -> ${dstip || '?'}${dport}`);\n}\nif (data.alert && data.alert.signature) {\n  details.push(`Suricata signature: ${data.alert.signature} (SID ${data.alert.signature_id || 'n/a'})`);\n  }\n\nif (data.audit) {\n  const exe = data.audit.exe || data.audit.command;\n  const euid = data.audit.euid || data.audit.uid;\n  if (exe) details.push(`Process: ${exe}${euid ? ' (uid=' + euid + ')' : ''}`);\n}\n\nif (data.syscheck && data.syscheck.path) {\n  details.push(`File: ${data.syscheck.path}${data.syscheck.event ? ' (' + data.syscheck.event + ')' : ''}`);\n}\n\nif (data.url) {\n  details.push(`HTTP: ${data.method || ''} ${data.url}`);\n}\n\nif (details.length === 0) {\n  details.push(`Raw log: ${alert.full_log || 'n/a'}`);\n}\n\nconst timestamp = alert.timestamp || \"\";\nlet waktu = \"\", tanggal = \"\";\nif (timestamp != \"\") {\n  const arr = timestamp.split(\"T\");\n  waktu = arr[1].split(\".\")[0];\n  tanggal = arr[0];\n}\n\nreturn {\n  json: {\n    ...alert,\n    enriched_summary: details.join('\\n'),\n    date: tanggal,\n    time: waktu\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        32
+      ],
+      "id": "de2c8bca-9843-4587-aba7-9346678d41d8",
+      "name": "Logic Enrichment Summary"
+    },
+    {
+      "parameters": {
+        "jsCode": "const level = $json.rule.level\n\nlet jira_priority\nif (level >= 12) {\n  jira_priority = \"1\";\n} else if (level >= 9) {\n  jira_priority = \"2\";\n} else if (level >= 6) {\n  jira_priority = \"3\";\n} else {\n  jira_priority = \"4\";\n}\n\nreturn {\n  ...$json,\n  jira_priority\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        -64
+      ],
+      "id": "ec027db4-ee4e-4c40-9323-d259fcd5b5bc",
+      "name": "Set Priority"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Logic Enrichment Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI + RAG Triage": {
+      "main": [
+        [
+          {
+            "node": "Set Priority",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Logic Enrichment Summary": {
+      "main": [
+        [
+          {
+            "node": "Push Notification Discord",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI + RAG Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Priority": {
+      "main": [
+        [
+          {
+            "node": "Ticketing Jira",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "23e158c1-0c44-4bdf-b51d-dda758c13086",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "ee55540e1211b7e8848065e2c6a46626cbc30e493fc14d67c581f52f1fedf27c"
+  },
+  "nodeGroups": [],
+  "id": "9WzEW33Fszrdx0TN",
+  "tags": []
+}
