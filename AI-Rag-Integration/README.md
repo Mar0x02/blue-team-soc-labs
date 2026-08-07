@@ -362,6 +362,31 @@ python ingest-cve.py
 
 ---
 
+## `triage-pipeline.py` — AI Triage Endpoint (Fase 1)
+
+FastAPI service yang serve endpoint `POST /triage`, dipanggil dari node HTTP Request di workflow n8n (lihat [`Infrastructure/n8n/README.md`](../Infrastructure/n8n/README.md)). Terima alert Wazuh yang udah di-enrich, retrieve context relevan dari collection `soc_knowledge`, terus generate ringkasan triage + analisis arah serangan lewat Ollama.
+
+```bash
+uvicorn triage-pipeline:app --host 0.0.0.0 --port 8000
+```
+
+| Property | Nilai |
+|----------|-------|
+| Embedding model | `nomic-embed-text` (sama kayak dipakai saat ingest, wajib konsisten) |
+| Generation model | `llama3.2:3b` |
+| Retrieval | 2 query: umum (4 hasil, semua tipe) + khusus `type: mitre_attack` (3 hasil, buat dasar analisis arah serangan) |
+| `temperature` | `0.2` — rendah sengaja, biar hasil triage konsisten/faktual, bukan variatif (default Ollama ~0.8 kekreatif buat task ini) |
+| `num_ctx` | `8192` — default Ollama sering 2048, bisa motong konteks RAG diam-diam (tanpa error) kalau gak di-set eksplisit |
+| `seed` | `42` — biar alert yang persis sama hasil triage-nya konsisten antar run |
+
+**Kenapa `llama3.2:3b`, bukan `qwen2.5:4b`** (padahal tabel stack model di root README nyebut `qwen2.5:4b` buat "RAG pipeline & threat intelligence"): dari pengalaman coba `qwen2.5:4b` di LM Studio sebelumnya, responsnya berat/lambat bahkan buat prompt sesimpel "halo". `llama3.2:3b` dicoba sebagai alternatif dan ✅ **confirmed** hasilnya bagus & responsif buat kebutuhan triage ini (format 4 poin ke-follow dengan baik, bahasa natural). Keputusan berbasis testing langsung, bukan asumsi dari rencana awal.
+
+**Endpoint:**
+- `POST /triage` — body: JSON hasil enrichment dari Code node n8n (`rule`, `data`, `agent`, `enriched_summary`). Return: alert asli **+ field `triage`** jadi satu object flat (bukan cuma `{"triage": "..."}`) — biar node n8n setelahnya (Jira) langsung bisa akses `{{ $json.rule.description }}` dst tanpa perlu cross-reference ke node sebelumnya.
+- `GET /health` — cek koneksi ChromaDB, return `collection_count`.
+
+---
+
 ## Requirements
 
 ```
