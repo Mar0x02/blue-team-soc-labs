@@ -51,12 +51,13 @@ Code in JavaScript  ── enrichment: bangun field `enriched_summary`
 
 - **Setup lengkap step-by-step**: [`Infrastructure/n8n-alerting-pipeline-setup.md`](../n8n-alerting-pipeline-setup.md)
 - **Exception Suricata buat trafik Wazuh Agent → Manager** (biar gak numpuk false-positive di rule egress): [`Detection-Engineer/suricata-trigger-rule/custom.rules`](../../Detection-Engineer/suricata-trigger-rule/custom.rules) — SID `1000009`, pakai variable pfSense `$SIEM_HOST`
-- **AI Triage endpoint** (Fase 1 roadmap AI+RAG): [`AI-Rag-Integration/triage-pipeline.py`](../../AI-Rag-Integration/triage-pipeline.py)
+- **AI+RAG API** (Fase 1 `/triage` + Fase 2 `/correlate/tick`, 1 service): [`AI-Rag-Integration/api-service.py`](../../AI-Rag-Integration/api-service.py)
+- **Setup workflow n8n Fase 2** (korelasi): [`Infrastructure/n8n-correlation-workflow-setup.md`](../n8n-correlation-workflow-setup.md)
 
 ---
 
 ## Roadmap AI+RAG (3 Fase)
 
-1. **Fase 1 (in progress)** — Triage dasar + investigasi arah serangan, berdasarkan retrieval dari `soc_knowledge` (Sigma/YARA/MITRE/CVE/THM). Endpoint: `AI-Rag-Integration/triage-pipeline.py`, dipanggil dari node HTTP Request baru di workflow n8n ini (paralel dari Code node, sejajar Jira & Discord).
-2. **Fase 2** — Korelasi log lintas-source.
+1. **Fase 1 (done, baseline)** — Triage dasar + investigasi arah serangan, berdasarkan retrieval dari `soc_knowledge` (Sigma/YARA/MITRE/CVE/THM). Endpoint: `POST /triage` di `AI-Rag-Integration/api-service.py`, dipanggil dari node HTTP Request di workflow n8n ini (paralel dari Code node, sejajar Jira & Discord).
+2. **Fase 2 (in progress)** — Korelasi log lintas-source/lintas-sensor jadi "full chain detection". Endpoint: `POST /correlate/tick` di service yang sama, dipanggil workflow n8n **terpisah** lewat Schedule Trigger — lihat [`n8n-correlation-workflow-setup.md`](../n8n-correlation-workflow-setup.md).
 3. **Fase 3** — Integrasi third-party vendor (kalau memungkinkan).

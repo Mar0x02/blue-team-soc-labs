@@ -172,6 +172,25 @@ sudo systemctl restart wazuh-manager
 
 > **Catatan (belum divalidasi live):** struktur script custom integration di atas based on pola dokumentasi resmi Wazuh — path `framework/python/bin/python3` dan struktur `case` bisa beda tergantung versi Wazuh yang ke-install di Dell. Wajib dicek dulu apakah path itu valid sebelum dianggap final (`ls /var/ossec/framework/python/bin/`), dan cek `ossec.log` kalau integrator gagal jalan.
 
+### 7. Update — Embed `alert_id` di Description Jira (prasyarat Fase 2)
+
+Route korelasi Fase 2 (`POST /correlate/tick`, logic di `AI-Rag-Integration/correlation_logic.py`, di-serve bareng `/triage` dari `api-service.py`) perlu nyari ticket Jira Fase 1 per alert lewat JQL search pas nge-finalize sebuah incident (detail di [`n8n-correlation-workflow-setup.md`](./n8n-correlation-workflow-setup.md)). Buat itu bisa jalan, node **"Ticketing Jira"** (existing, dari Step 5) perlu nambahin ID unik tiap alert ke field **Description**.
+
+Wazuh nyimpen ID unik ini di field top-level `id` alert (**bukan** `rule.id` — itu ID rule/signature, bukan ID kejadian spesifik). Field ini ikut kebawa flat lewat `...alert` di node "Logic Enrichment Summary", jadi bisa diakses `{{ $json.id }}` di node-node setelahnya tanpa perubahan lain.
+
+Ubah expression **Description** di node "Ticketing Jira" jadi:
+
+```
+=Agent: "{{ $json.agent.name }}"
+Level: {{ $json.rule.level }}
+Rule ID: {{ $json.rule.id }}
+Alert ID: {{ $json.id }}
+{{ $json.enriched_summary }}
+{{ $json.triage }}
+```
+
+⚠️ **Belum divalidasi** — asumsi field top-level `id` beneran ada di payload yang dikirim Wazuh Integrator (harusnya iya, karena `custom-n8n.py` cuma `json.load()` file alert mentah tanpa strip field apapun sebelum di-POST), tapi belum dicek langsung ke eksekusi n8n asli. Cek tab **Executions** (klik salah satu run, lihat output node "Logic Enrichment Summary") buat mastiin `id` beneran muncul sebelum lanjut ke Fase 2.
+
 ---
 
 ## Verifikasi

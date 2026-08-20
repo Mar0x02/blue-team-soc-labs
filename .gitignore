@@ -41,6 +41,9 @@ faiss_index/
 *.index
 *.faiss
 
+# Correlation state (Fase 2, SQLite runtime state — bukan source data)
+correlation_state.db
+
 # RAG Data Sources (di-clone lokal, terlalu besar untuk repo)
 AI-Rag-Integration/data/sigma/
 AI-Rag-Integration/data/rules/

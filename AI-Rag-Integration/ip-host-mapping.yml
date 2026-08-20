@@ -1,0 +1,22 @@
+# ip-host-mapping.yml
+#
+# Resolve IP -> canonical host name buat korelasi Fase 2 (full chain detection).
+# Alert agent-based (auditd, FIM, Wazuh native) udah punya `agent.name` sendiri,
+# gak butuh lookup ini. Yang butuh mapping ini cuma sumber agentless (Suricata di
+# pfSense, forward via syslog) yang cuma punya src_ip/dest_ip mentah di alert-nya --
+# resolve ke `name` di sini biar bisa di-join sama `agent.name` dari sumber lain.
+
+hosts:
+  - ip: "10.10.10.10"
+    name: "Web-Server"
+    agent_id: "005"      # confirmed user -- dicek manual via Dashboard Wazuh
+    has_agent: true
+    zone: "LAN1"
+    role: "target"
+
+  - ip: "10.10.10.1"
+    name: "pfSense"
+    agent_id: "000"       # confirmed user -- manager-processed, bukan agent terdaftar
+    has_agent: false
+    zone: "gateway"
+    role: "firewall"

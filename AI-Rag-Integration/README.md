@@ -8,18 +8,24 @@ Folder ini berisi pipeline **RAG (Retrieval-Augmented Generation)** yang mengind
 
 ```
 AI-Rag-Integration/
-├── ingest-thm.py        # Ingest writeup TryHackMe (Markdown/PDF)
-├── ingest-yara.py       # Ingest YARA rules (.yar/.yara)
-├── ingest-yml.py        # Ingest Sigma rules (.yml/.yaml)
-├── ingest-mitre.py      # Ingest MITRE ATT&CK (JSON/STIX)
-├── ingest-cve.py        # Ingest CVE database (JSON v5)
-├── requirements.txt     # Python dependencies
-├── data/                # Folder data source (di-gitignore, clone manual)
-│   ├── sigma/           # Clone dari SigmaHQ/sigma
-│   ├── rules/           # Clone dari Yara-Rules/rules
-│   ├── cvelistV5/       # Clone dari CVEProject/cvelistV5
-│   └── cti/             # Clone dari mitre/cti
-└── chroma_db/           # Vector database hasil ingest (di-gitignore)
+├── ingest-thm.py         # Ingest writeup TryHackMe (Markdown/PDF)
+├── ingest-yara.py        # Ingest YARA rules (.yar/.yara)
+├── ingest-yml.py         # Ingest Sigma rules (.yml/.yaml)
+├── ingest-mitre.py       # Ingest MITRE ATT&CK (JSON/STIX)
+├── ingest-cve.py         # Ingest CVE database (JSON v5)
+├── api-service.py        # FastAPI: POST /triage (Fase 1) + POST /correlate/tick (Fase 2)
+├── rag_common.py         # Shared retrieval ChromaDB + Ollama client (dipakai api-service.py & correlation_logic.py)
+├── correlation_logic.py  # Logic korelasi Fase 2 (clustering, query Wazuh Indexer, narrative)
+├── correlation_state.py  # SQLite state Fase 2 (checkpoint, dedup, event/incident)
+├── ip-host-mapping.yml   # IP -> host mapping buat resolve alert agentless (Suricata/pfSense)
+├── requirements.txt      # Python dependencies
+├── data/                 # Folder data source (di-gitignore, clone manual)
+│   ├── sigma/            # Clone dari SigmaHQ/sigma
+│   ├── rules/            # Clone dari Yara-Rules/rules
+│   ├── cvelistV5/        # Clone dari CVEProject/cvelistV5
+│   └── cti/              # Clone dari mitre/cti
+├── chroma_db/            # Vector database hasil ingest (di-gitignore)
+└── correlation_state.db  # SQLite DB Fase 2 (di-gitignore, dibuat otomatis saat runtime)
 ```
 
 ---
@@ -362,12 +368,12 @@ python ingest-cve.py
 
 ---
 
-## `triage-pipeline.py` — AI Triage Endpoint (Fase 1)
+## `api-service.py` — SOC AI+RAG API (Fase 1 triage + Fase 2 korelasi)
 
-FastAPI service yang serve endpoint `POST /triage`, dipanggil dari node HTTP Request di workflow n8n (lihat [`Infrastructure/n8n/README.md`](../Infrastructure/n8n/README.md)). Terima alert Wazuh yang udah di-enrich, retrieve context relevan dari collection `soc_knowledge`, terus generate ringkasan triage + analisis arah serangan lewat Ollama.
+FastAPI service **tunggal** yang serve `POST /triage` (Fase 1) dan `POST /correlate/tick` (Fase 2). Awalnya didesain 2 proses/port terpisah, digabung jadi 1 service karena dua-duanya jalan di M1 yang sama & sama-sama numpang Ollama+ChromaDB (`rag_common.py`) — gak ada alasan kuat buat overhead 2 proses yang perlu di-manage/di-restart terpisah. Bedanya cuma di level route, bukan level proses: `/triage` dipanggil n8n tiap alert masuk (push, stateless), `/correlate/tick` dipanggil n8n Schedule Trigger tiap ~15 menit (pull, stateful lewat `correlation_state.py`).
 
 ```bash
-uvicorn triage-pipeline:app --host 0.0.0.0 --port 8000
+uvicorn api-service:app --host 0.0.0.0 --port 8000
 ```
 
 | Property | Nilai |
@@ -383,6 +389,7 @@ uvicorn triage-pipeline:app --host 0.0.0.0 --port 8000
 
 **Endpoint:**
 - `POST /triage` — body: JSON hasil enrichment dari Code node n8n (`rule`, `data`, `agent`, `enriched_summary`). Return: alert asli **+ field `triage`** jadi satu object flat (bukan cuma `{"triage": "..."}`) — biar node n8n setelahnya (Jira) langsung bisa akses `{{ $json.rule.description }}` dst tanpa perlu cross-reference ke node sebelumnya.
+- `POST /correlate/tick` — Fase 2, korelasi lintas-alert/lintas-sensor jadi "full chain detection". Logic-nya (query Wazuh Indexer, clustering event/incident, generate narrative) ada di `correlation_logic.py` + state SQLite `correlation_state.py`, resolve host lewat `ip-host-mapping.yml`. Return: `{"new_alerts_processed": <int>, "finalized_incidents": [{"incident_id", "host_name", "narrative", "alert_ids"}]}`. Detail arsitektur & setup workflow n8n-nya ada di [`Infrastructure/n8n-correlation-workflow-setup.md`](../Infrastructure/n8n-correlation-workflow-setup.md).
 - `GET /health` — cek koneksi ChromaDB, return `collection_count`.
 
 ---
@@ -394,6 +401,9 @@ chromadb>=0.5.0
 ollama>=0.3.0
 pyyaml>=6.0
 pypdf>=4.0.0
+fastapi>=0.115.0
+uvicorn>=0.30.0
+opensearch-py>=2.6.0
 ```
 
 ---
