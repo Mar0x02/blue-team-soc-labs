@@ -162,7 +162,7 @@ Tambahin block `<integration>` di `ossec.conf` (Wazuh Manager):
 </integration>
 ```
 
-> **Catatan threshold:** `<level>7</level>` dipasang sementara sebagai baseline umum (default level actionable Wazuh) — begitu custom rule di `Detection-Engineer/wazuh-rules/` (yang belum di-deploy ke Dell) resmi diaktifin, nilai ini perlu di-tuning ulang biar selaras sama severity yang udah didesain di sana (misal cuma forward level ≥10, biar Jira/Discord gak kebanjiran alert level rendah).
+> **Catatan threshold:** `<level>7</level>` dipasang sementara sebagai baseline umum (default level actionable Wazuh) — begitu custom rule di `Detection-Engineer/wazuh/` (yang belum di-deploy ke Dell) resmi diaktifin, nilai ini perlu di-tuning ulang biar selaras sama severity yang udah didesain di sana (misal cuma forward level ≥10, biar Jira/Discord gak kebanjiran alert level rendah).
 
 Restart manager:
 

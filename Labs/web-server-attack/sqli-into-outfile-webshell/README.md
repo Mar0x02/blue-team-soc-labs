@@ -59,7 +59,7 @@ GRANT ALL PRIVILEGES ON dvwa.* TO 'dvwa'@'localhost';
 |---|---|---|---|---|
 | `1' UNION SELECT '<?php...>',2 INTO OUTFILE '...shell.php'-- -` | 200 | ❌ Gagal — `Access denied`, file gak ke-tulis | ✅ Ya | **31106** — "A web attack returned code 200 (success)", level 6 |
 
-**Catatan:** meskipun hasilnya PHP Fatal Error, HTTP status tetep `200` (error PHP-level, bukan HTTP-level), jadi rule default `31106` tetep ke-trigger. Custom rule kita (`100200`-`100202` di [`sql_injection_rules.xml`](../../../Detection-Engineer/wazuh-rules/sql_injection_rules.xml)) yang seharusnya independen dari status code **belum ke-konfirmasi jalan** buat request ini — masih dalam tahap debugging terpisah, hasil validasinya di-track di [`sql-injection/README.md`](../sql-injection/README.md).
+**Catatan:** meskipun hasilnya PHP Fatal Error, HTTP status tetep `200` (error PHP-level, bukan HTTP-level), jadi rule default `31106` tetep ke-trigger. Custom rule kita (`100200`-`100202` di [`sql_injection_rules.xml`](../../../Detection-Engineer/wazuh/rule/sql_injection_rules.xml)) yang seharusnya independen dari status code **belum ke-konfirmasi jalan** buat request ini — masih dalam tahap debugging terpisah, hasil validasinya di-track di [`sql-injection/README.md`](../sql-injection/README.md).
 
 ---
 

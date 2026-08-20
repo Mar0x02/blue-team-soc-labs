@@ -62,7 +62,7 @@ custom.rules
 
 `emerging-attack_response.rules` paling krusial buat skenario reverse shell — kategori ini isinya signature buat "tanda-tanda command berhasil dieksekusi di korban" (misal output `uid=` dari `id`, banner shell), yang paling relevan nangkep traffic shell interaktif pas ngirim balik output command ke Kali.
 
-`custom.rules` beda dari 5 kategori lain — ini bukan bagian ET Open, tapi container kosong buat rule yang ditulis sendiri. Rule ET Open sifatnya generic, kemungkinan gak match persis sama payload spesifik lab ini (`mkfifo`+`nc` reverse shell, command injection lewat form DVWA). Centang dulu kategorinya biar aktif — isi rule-nya nyusul, mirip pola custom Wazuh rule yang udah dibuat buat SQLi (`Detection-Engineer/wazuh-rules/sql_injection_rules.xml`), nanti disimpen di `Detection-Engineer/` juga.
+`custom.rules` beda dari 5 kategori lain — ini bukan bagian ET Open, tapi container kosong buat rule yang ditulis sendiri. Rule ET Open sifatnya generic, kemungkinan gak match persis sama payload spesifik lab ini (`mkfifo`+`nc` reverse shell, command injection lewat form DVWA). Centang dulu kategorinya biar aktif — isi rule-nya nyusul, mirip pola custom Wazuh rule yang udah dibuat buat SQLi (`Detection-Engineer/wazuh/rule/sql_injection_rules.xml`), nanti disimpen di `Detection-Engineer/` juga.
 
 ### 4. Pastiin mode IDS, bukan IPS
 
@@ -98,7 +98,7 @@ suricata[23679]: [1:2210054:1] SURICATA STREAM excessive retransmissions [Classi
 
 ### 8. Custom decoder + rule
 
-Decoder-nya disimpen di [`Detection-Engineer/wazuh-rules/suricata-decoder.xml`](../Detection-Engineer/wazuh-rules/suricata-decoder.xml):
+Decoder-nya disimpen di [`Detection-Engineer/wazuh/decoder/suricata-decoder.xml`](../Detection-Engineer/wazuh/decoder/suricata-decoder.xml):
 
 ```xml
 <decoder name="suricata-alert">
@@ -108,7 +108,7 @@ Decoder-nya disimpen di [`Detection-Engineer/wazuh-rules/suricata-decoder.xml`](
 </decoder>
 ```
 
-Rule dasar + contoh child rule spesifik ada di [`Detection-Engineer/wazuh-rules/suricata-rules.xml`](../Detection-Engineer/wazuh-rules/suricata-rules.xml) — rule dasar (`100400`, level 3) generate alert buat **semua** alert Suricata, child rule (`100401`) contoh nge-filter SID spesifik (misal SID custom `1000001` dari `custom.rules` yang dibahas di section sebelumnya).
+Rule dasar + contoh child rule spesifik ada di [`Detection-Engineer/wazuh/rule/suricata-rules.xml`](../Detection-Engineer/wazuh/rule/suricata-rules.xml) — rule dasar (`100400`, level 3) generate alert buat **semua** alert Suricata, child rule (`100401`) contoh nge-filter SID spesifik (misal SID custom `1000001` dari `custom.rules` yang dibahas di section sebelumnya).
 
 > **Gotcha regex PCRE2 — bikin frustasi lumayan lama, dicatet biar gak keulang:**
 > - **`<prematch>` itu wajib** buat root decoder Wazuh (gak punya `<parent>`) — walaupun mau ngandelin regex PCRE2 sepenuhnya buat matching, `<prematch>` tetep harus ada, kalau enggak `wazuh-analysisd -t` langsung error `No 'prematch' found in decoder`.

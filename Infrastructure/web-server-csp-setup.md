@@ -123,7 +123,7 @@ sudo systemctl restart wazuh-agent
 
 ### 6. Custom Wazuh rule — match `csp-reports.log`
 
-Rule disimpan di [`Detection-Engineer/wazuh-rules/csp-report-rules.xml`](../Detection-Engineer/wazuh-rules/csp-report-rules.xml) — gak butuh custom decoder, karena `log_format json` bikin Wazuh auto-extract field lewat JSON decoder bawaan.
+Rule disimpan di [`Detection-Engineer/wazuh/rule/csp-report-rules.xml`](../Detection-Engineer/wazuh/rule/csp-report-rules.xml) — gak butuh custom decoder, karena `log_format json` bikin Wazuh auto-extract field lewat JSON decoder bawaan.
 
 Copy ke `/var/ossec/etc/rules/` di Dell, test & restart:
 

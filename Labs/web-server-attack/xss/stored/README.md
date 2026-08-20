@@ -142,7 +142,7 @@ Satu-satunya jalur yang punya potensi nutup blind spot ini adalah sinyal dari **
 
 ## Remediasi — CSP Report-Only Menutup Blind Spot Replay
 
-Setelah **CSP `Report-Only`** ([`web-server-csp-setup.md`](../../../../Infrastructure/web-server-csp-setup.md)) dan custom Wazuh rule ([`csp-report-rules.xml`](../../../../Detection-Engineer/wazuh-rules/csp-report-rules.xml)) selesai diimplementasi, momen **replay** yang sebelumnya confirmed blind spot di-replay ulang buat mastiin blind spot itu beneran ketutup.
+Setelah **CSP `Report-Only`** ([`web-server-csp-setup.md`](../../../../Infrastructure/web-server-csp-setup.md)) dan custom Wazuh rule ([`csp-report-rules.xml`](../../../../Detection-Engineer/wazuh/rule/csp-report-rules.xml)) selesai diimplementasi, momen **replay** yang sebelumnya confirmed blind spot di-replay ulang buat mastiin blind spot itu beneran ketutup.
 
 ### Data Guestbook Saat Test
 

@@ -180,7 +180,7 @@ Di jam 14:50:43, attacker melakukan exfiltrasi terhadap tabel `users` — comman
 
 Kondisinya: kita coba desain custom rule yang nutup celah **fase recon SQLi** — spesifiknya percobaan **enumerasi jumlah kolom** (`ORDER BY`/`GROUP BY` incremental) yang di atas terbukti **lolos total** dari default ruleset Wazuh. Pendekatannya sengaja dibuat **bertahap, satu rule dulu** (bukan langsung tiered/parent-child yang kompleks), biar tiap bagian regex-nya bener-bener dipahami sebelum nambah cakupan.
 
-File: [`sql_injection_rules.xml`](../../../Detection-Engineer/wazuh-rules/sql_injection_rules.xml)
+File: [`sql_injection_rules.xml`](../../../Detection-Engineer/wazuh/rule/sql_injection_rules.xml)
 
 ```xml
 <rule id="100203" level="8">

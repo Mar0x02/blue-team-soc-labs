@@ -48,7 +48,7 @@ Design 3 tier severity berdasarkan metadata request, bukan isi payload (lihat [V
 | Referer gak ada (`-`) | `100502` | 5 (medium) | Anomali lemah — bisa false positive dari browser dengan referrer-policy strict, bukan cuma script |
 | User-Agent match known automation tool (`python-requests`, `curl`, `Go-http-client`, dll — blocklist) | `100503` | 10 (high) | Sinyal eksplisit & kuat, konsisten sama severity blocklist CSP (`100406`/`100407`) di lab XSS |
 
-File: [`Detection-Engineer/wazuh-rules/javascript-attack-rules.xml`](../../../Detection-Engineer/wazuh-rules/javascript-attack-rules.xml), [`Detection-Engineer/wazuh-rules/web-accesslog-combined-decoder.xml`](../../../Detection-Engineer/wazuh-rules/web-accesslog-combined-decoder.xml).
+File: [`Detection-Engineer/wazuh/rule/javascript-attack-rules.xml`](../../../Detection-Engineer/wazuh/rule/javascript-attack-rules.xml), [`Detection-Engineer/wazuh/decoder/web-accesslog-combined-decoder.xml`](../../../Detection-Engineer/wazuh/decoder/web-accesslog-combined-decoder.xml).
 
 **Blind spot yang ketemu duluan sebelum rule-nya bisa jalan**: dua field paling penting buat hipotesis kita (`Referer`, `User-Agent`) ternyata **gak pernah di-decode** oleh decoder bawaan Wazuh (`web-accesslog`) — decoder itu cuma extract `srcip`/`protocol`/`url`/`id` dari Combined Log Format Apache, berhenti persis di status code, gak nyentuh 2 field terakhir sama sekali. Confirmed lewat `wazuh-logtest` (`Phase 2` gak pernah nunjukkin `referer`/`user_agent` walau ada di raw log-nya).
 

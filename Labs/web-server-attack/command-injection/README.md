@@ -183,7 +183,7 @@ Log ini nunjukin **rantai proses lengkap** yang terjadi di balik layar satu requ
 
 Rule yang kepake di layer ini ada di dua tempat (beda layer, collection vs detection — lihat pembahasan konsepnya di [`web-server-auditd-setup.md`](../../../Infrastructure/web-server-auditd-setup.md)):
 - [`Detection-Engineer/auditd-trigger-rule/audit.rules`](../../../Detection-Engineer/auditd-trigger-rule/audit.rules) — audit rule di kernel level yang nentuin data apa yang direkam (`execve` dari `uid=33`/www-data)
-- [`Detection-Engineer/wazuh-rules/auditd_lolbin_rules.xml`](../../../Detection-Engineer/wazuh-rules/auditd_lolbin_rules.xml) — Wazuh rule `100300` yang mutusin data itu suspicious dan nge-generate alert
+- [`Detection-Engineer/wazuh/rule/auditd_lolbin_rules.xml`](../../../Detection-Engineer/wazuh/rule/auditd_lolbin_rules.xml) — Wazuh rule `100300` yang mutusin data itu suspicious dan nge-generate alert
 
 ### Alert #2 — Suricata (network, perimeter layer)
 
@@ -198,8 +198,8 @@ Alert ini datang dari custom rule Suricata (`SID 1000003`) yang dibangun buat la
 
 Sama kayak auditd, rule-nya juga kesebar di beberapa layer (lihat pembahasan lengkap di [`pfsense-suricata-setup.md`](../../../Infrastructure/pfsense-suricata-setup.md)):
 - [`Detection-Engineer/suricata-trigger-rule/custom.rules`](../../../Detection-Engineer/suricata-trigger-rule/custom.rules) — rule Suricata (`SID 1000001` & `1000003`) yang jalan langsung di pfSense, nentuin traffic mana yang di-flag
-- [`Detection-Engineer/wazuh-rules/suricata-decoder.xml`](../../../Detection-Engineer/wazuh-rules/suricata-decoder.xml) — decoder Wazuh buat parse raw alert Suricata jadi field terstruktur
-- [`Detection-Engineer/wazuh-rules/suricata-rules.xml`](../../../Detection-Engineer/wazuh-rules/suricata-rules.xml) — Wazuh rule `100400`/`100401` yang mutusin alert Suricata itu masuk Dashboard
+- [`Detection-Engineer/wazuh/decoder/suricata-decoder.xml`](../../../Detection-Engineer/wazuh/decoder/suricata-decoder.xml) — decoder Wazuh buat parse raw alert Suricata jadi field terstruktur
+- [`Detection-Engineer/wazuh/rule/suricata-rules.xml`](../../../Detection-Engineer/wazuh/rule/suricata-rules.xml) — Wazuh rule `100400`/`100401` yang mutusin alert Suricata itu masuk Dashboard
 
 ### Perbandingan: Sebelum vs Sesudah
 

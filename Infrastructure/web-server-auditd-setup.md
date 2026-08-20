@@ -80,7 +80,7 @@ sudo ls /var/ossec/ruleset/rules | grep "auditd"
 # 0365-auditd_rules.xml
 ```
 
-Ruleset default (`0365-auditd_rules.xml`) cuma nyampe ke rule dasar `80700` (level 0, "Audit: messages grouped") — gak ada rule bawaan yang nge-generate alert spesifik buat key custom kayak `www_data_exec`. Jadi perlu **custom rule tambahan**, disimpen di [`Detection-Engineer/wazuh-rules/auditd_lolbin_rules.xml`](../Detection-Engineer/wazuh-rules/auditd_lolbin_rules.xml):
+Ruleset default (`0365-auditd_rules.xml`) cuma nyampe ke rule dasar `80700` (level 0, "Audit: messages grouped") — gak ada rule bawaan yang nge-generate alert spesifik buat key custom kayak `www_data_exec`. Jadi perlu **custom rule tambahan**, disimpen di [`Detection-Engineer/wazuh/rule/auditd_lolbin_rules.xml`](../Detection-Engineer/wazuh/rule/auditd_lolbin_rules.xml):
 
 ```xml
 <group name="auditd,lolbin,command_injection,">

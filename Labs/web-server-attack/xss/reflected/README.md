@@ -140,7 +140,7 @@ Pola yang konsisten dari 3 request ini:
 | Percobaan 1 | `?name=<script>alert("Jude")</script>` | Ya (rule `31106`) |
 | Percobaan 2 | `?name=<script>alert(document.cookie)</script>` | Ya (rule `31106`) |
 
-Rule `31106` bukan custom rule project ini (gak ada file-nya di `Detection-Engineer/wazuh-rules/`) — ini rule bawaan Wazuh, ada di default ruleset `/var/ossec/ruleset/rules/0245-web_rules.xml` di Dell. Konfirmasi langsung dari isi file-nya:
+Rule `31106` bukan custom rule project ini (gak ada file-nya di `Detection-Engineer/wazuh/`) — ini rule bawaan Wazuh, ada di default ruleset `/var/ossec/ruleset/rules/0245-web_rules.xml` di Dell. Konfirmasi langsung dari isi file-nya:
 
 ```xml
 <rule id="31105" level="6">
