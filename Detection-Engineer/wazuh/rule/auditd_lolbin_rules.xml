@@ -1,16 +1,6 @@
 <!-- Local rules -->
 <!-- Modify it at your will. -->
 
-<!--
-2026-08-04 — Tiering severity (sebelumnya blanket level 12 buat SEMUA command www-data).
-Ditemukan di lab Full Attack Chain (Labs/web-server-attack/full-attack-chain/README.md,
-Analisis Insiden Event 3): command recon/informational (ls, id, ps, uname, dst) ke-alert
-di level yang sama persis dengan command yang genuinely berbahaya (su, sudo, wget, exploit
-binary) — bikin analyst yang filter dashboard by severity gak bisa bedain noise dari sinyal
-kritis. Dipecah jadi 2 tier: 100300 (default, informational) dan 100301 (child rule,
-escalate ke level 12 kalau command match daftar high-impact).
--->
-
 <group name="auditd,lolbin,command_injection,">
 
   <rule id="100300" level="7">

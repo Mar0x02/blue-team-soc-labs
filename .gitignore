@@ -53,3 +53,8 @@ AI-Rag-Integration/data/thm/
 
 # output files
 out/
+
+# Update notes & functional notes (catatan progress/history + penjelasan WHY per folder,
+# dipindah dari komentar source biar file bersih — bukan bagian writeup resmi)
+update.md
+function.md

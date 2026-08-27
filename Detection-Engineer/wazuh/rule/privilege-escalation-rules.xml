@@ -1,32 +1,6 @@
 <!-- Local rules -->
 <!-- Modify it at your will. -->
 
-<!--
-2026-08-04 — Nutup gap yang ditemukan di lab Full Attack Chain
-(Labs/web-server-attack/full-attack-chain/README.md, Analisis Insiden Event 7):
-rule auditd (auditd_lolbin_rules.xml, 100301) cuma flag PERCOBAAN su/sudo dari www-data,
-gak ada yang flag kalau percobaan itu BERHASIL. Bukti keberhasilan cuma nongol sebagai
-"PAM: Login session opened." dari rule default vendor, level 3 (severity sama kayak
-login/logout normal) — kekubur di antara ratusan alert level 12 dari rule 100301.
-
-Dipakai <if_group>authentication_success</if_group> (bukan <if_sid> ke rule vendor
-spesifik) karena ID rule default PAM bisa beda-beda antar versi ruleset Wazuh — nge-hook
-by group tag lebih portable, gak gampang break kalau ruleset di-update.
-
-Sinyal utamanya: <field name="uid">33</field> — field ini nunjukin proses YANG MENGINISIASI su/sudo
-punya uid 33 (www-data). Login/session normal yang diinisiasi manusia lewat console/SSH
-gak akan punya uid=33 di field ini (lihat pembanding di README: sesi anang jam 14:12:54
-via `login` di tty1 vs sesi jam 15:21:39 via `su` dari www-data, tty=(none)).
-
-Catatan: harus pakai <field name="uid"> (bukan tag dedicated <uid>) — <uid> bukan tag
-dedicated yang dikenal Wazuh, sempet bikin wazuh-analysisd -t error "Invalid option 'uid'".
-
-✅ Confirmed via wazuh-logtest v4.13.1: decoder `pam` extract field `uid: '33'` terpisah
-dari `dstuser: 'anang(uid=1000)'` dari sample log
-"session opened for user anang(uid=1000) by (uid=33)" — rule 100303 fire level 14,
-description ke-substitusi $(dstuser) jadi "anang(uid=1000)" dengan benar.
--->
-
 <group name="privilege_escalation,webshell_pivot,">
 
   <rule id="100303" level="14">

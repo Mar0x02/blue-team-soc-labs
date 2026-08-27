@@ -28,7 +28,6 @@
     <group>xss,</group>
   </rule>
 
-  <!-- ID lompat ke 100409 buat hindarin collision sama range 100403-100408 (csp-report-rules.xml) -->
   <rule id="100409" level="12">
     <if_sid>100400</if_sid>
     <field name="suricata.sid" type="pcre2">:1000005:</field>

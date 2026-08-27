@@ -1,31 +1,6 @@
 <!-- Local rules -->
 <!-- Modify it at your will. -->
 
-<!--
-JavaScript Attacks - client-side trust bypass detection (DVWA JS Attacks module).
-Referensi: Labs/web-server-attack/javascript-attacks/README.md
-
-Payload/request body-nya bersih secara sintaksis (token md5(rot13(phrase)) valid,
-gak ada signature buat di-match kayak XSS/SQLi). Satu-satunya sinyal yang tersisa
-ada di metadata request (User-Agent, Referer) - low-confidence, gampang dispoof
-attacker yang niat, tapi cukup buat triage awal script vs browser asli.
-
-Decoder: "web-accesslog" bawaan TETAP UTUH, gak diganti/di-exclude - field
-size/referer/user_agent ditambahin lewat sibling decoder mandiri
-"web-accesslog-custom-js-attack" (lihat web-accesslog-combined-decoder.xml,
-match independen dari awal baris log, bukan nyambung offset).
-
-100500 WAJIB <if_sid>31108</if_sid>, BUKAN <decoded_as>web-accesslog</decoded_as>
-independen. Udah ditest ulang (24 Jul, abis decoder final beres): pake
-decoded_as, SEMUA url (termasuk yang bukan JS Attacks) selalu jatuh ke 31108
-- rantai 100500->100501 gak pernah kecek sama sekali walau field decoder udah
-lengkap. Ternyata teori "kedalaman match menang" itu salah/gak konsisten -
-satu-satunya cara yang confirmed reliable ya numpang if_sid ke 31108 kayak
-gini. Field <url> di 100500 yang jadi filter penyempit (31108 sendiri lebar,
-nangkep hampir semua "simple query" url) - request ke path lain (co: xss_d)
-confirmed tetep balik ke 31108 apa adanya, gak ke-escalate ke rule kita.
--->
-
 <group name="javascript_attacks,client_side_trust,web,attack,">
 
   <rule id="100500" level="0">
