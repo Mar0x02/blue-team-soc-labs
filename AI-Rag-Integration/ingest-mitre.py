@@ -1,9 +1,3 @@
-"""
-ingest-mitre.py - MITRE ATT&CK Ingestion (Production-Ready)
-Handle bundle format, anti-duplicate, resume capability
-Usage: python ingest-mitre.py --docs /path/to/mitre/cti/enterprise-attack
-"""
-
 import os
 import json
 import argparse
@@ -14,13 +8,12 @@ import chromadb
 import ollama
 from datetime import datetime
 
-# Config
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "soc_knowledge"
 EMBED_MODEL = "nomic-embed-text"
 BATCH_SIZE = 50
 ERROR_LOG_FILE = "./ingest_mitre_errors.log"
-MAX_EMBED_CHARS = 8000  # nomic-embed-text context = 8192 tokens, BERT tokenizer ~3-4 chars/token
+MAX_EMBED_CHARS = 8000
 EMBED_RETRIES = 3
 EMBED_RETRY_DELAY = 5
 
@@ -35,8 +28,7 @@ def format_size(size_bytes):
     else:
         return f"{size_bytes/(1024*1024):.1f}MB"
 
-def extract_mitre_object(obj):
-    """Ekstrak 1 STIX object dari MITRE ATT&CK"""
+def extract_mitre_object(obj, technique_by_strategy=None, technique_by_analytic=None):
     try:
         obj_type = obj.get("type", "unknown")
 
@@ -88,6 +80,16 @@ def extract_mitre_object(obj):
             if detection:
                 metadata["detection"] = detection[:300]
 
+        elif obj_type == "x-mitre-detection-strategy":
+            technique_id = (technique_by_strategy or {}).get(stix_id, "")
+            if technique_id:
+                metadata["technique_id"] = technique_id
+
+        elif obj_type == "x-mitre-analytic":
+            technique_id = (technique_by_analytic or {}).get(stix_id, "")
+            if technique_id:
+                metadata["technique_id"] = technique_id
+
         elif obj_type == "course-of-action":
             external_refs = obj.get("external_references", [])
             for ref in external_refs:
@@ -119,7 +121,7 @@ def extract_mitre_object(obj):
 
         text_parts = [f"Name: {name}"]
 
-        if obj_type == "attack-pattern" and metadata.get("technique_id"):
+        if obj_type in ("attack-pattern", "x-mitre-detection-strategy", "x-mitre-analytic") and metadata.get("technique_id"):
             text_parts.insert(0, f"Technique ID: {metadata['technique_id']}")
         elif obj_type == "intrusion-set" and metadata.get("group_id"):
             text_parts.insert(0, f"Group ID: {metadata['group_id']}")
@@ -145,8 +147,60 @@ def extract_mitre_object(obj):
     except Exception:
         return None, None, None
 
-def process_bundle_file(filepath, collection, existing_ids, batch_data):
-    """Process file JSON yang berisi bundle. Return (objects_added, objects_skipped)."""
+def build_relationship_maps(docs_path):
+    technique_by_attack_pattern = {}
+    detects_edges = []
+    analytic_refs_by_strategy = {}
+
+    for root, _, files in os.walk(docs_path):
+        for fname in files:
+            if not fname.endswith(".json"):
+                continue
+            filepath = os.path.join(root, fname)
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+
+            if isinstance(data, dict) and "objects" in data:
+                objects = data.get("objects", [])
+            elif isinstance(data, list):
+                objects = data
+            else:
+                objects = [data]
+
+            for obj in objects:
+                obj_type = obj.get("type")
+                if obj_type == "attack-pattern":
+                    stix_id = obj.get("id", "")
+                    for ref in obj.get("external_references", []):
+                        if ref.get("source_name") == "mitre-attack":
+                            technique_by_attack_pattern[stix_id] = ref.get("external_id", "")
+                            break
+                elif obj_type == "relationship" and obj.get("relationship_type") == "detects":
+                    detects_edges.append((obj.get("source_ref"), obj.get("target_ref")))
+                elif obj_type == "x-mitre-detection-strategy":
+                    analytic_refs_by_strategy[obj.get("id", "")] = obj.get("x_mitre_analytic_refs", []) or []
+
+    technique_by_strategy = {}
+    for source_ref, target_ref in detects_edges:
+        technique_id = technique_by_attack_pattern.get(target_ref)
+        if technique_id:
+            technique_by_strategy[source_ref] = technique_id
+
+    technique_by_analytic = {}
+    for strategy_id, analytic_ids in analytic_refs_by_strategy.items():
+        technique_id = technique_by_strategy.get(strategy_id)
+        if not technique_id:
+            continue
+        for analytic_id in analytic_ids:
+            technique_by_analytic[analytic_id] = technique_id
+
+    return technique_by_strategy, technique_by_analytic
+
+
+def process_bundle_file(filepath, collection, existing_ids, batch_data, technique_by_strategy=None, technique_by_analytic=None):
     objects_processed = 0
     objects_skipped = 0
 
@@ -162,7 +216,7 @@ def process_bundle_file(filepath, collection, existing_ids, batch_data):
             objects = [data]
 
         for obj in objects:
-            full_text, metadata, stix_id = extract_mitre_object(obj)
+            full_text, metadata, stix_id = extract_mitre_object(obj, technique_by_strategy, technique_by_analytic)
 
             if not full_text or not metadata or not stix_id:
                 continue
@@ -239,6 +293,10 @@ def ingest_mitre_folder(docs_path):
         offset += 5000
     print(f"✅ Found {len(existing_ids)} entries yang udah ada.\n")
 
+    print("🔗 Pass 1: resolve technique_id buat x-mitre-analytic / x-mitre-detection-strategy...")
+    technique_by_strategy, technique_by_analytic = build_relationship_maps(docs_path)
+    print(f"✅ {len(technique_by_strategy)} detection-strategy & {len(technique_by_analytic)} analytic ke-resolve ke technique_id.\n")
+
     all_json_files = []
     for root, _, files in os.walk(docs_path):
         for f in files:
@@ -278,7 +336,9 @@ def ingest_mitre_folder(docs_path):
             sys.stdout.flush()
 
         try:
-            objects_added, objects_skipped = process_bundle_file(filepath, collection, existing_ids, batch_data)
+            objects_added, objects_skipped = process_bundle_file(
+                filepath, collection, existing_ids, batch_data, technique_by_strategy, technique_by_analytic
+            )
             total_objects += objects_added
             skipped_existing += objects_skipped
             total_bytes_processed += file_size
