@@ -1,39 +1,15 @@
-"""
-api-service.py - SOC AI+RAG API (Fase 1 triage + Fase 2 korelasi), 1 service.
-
-Awalnya Fase 1 (/triage) dan Fase 2 (/correlate/tick) dipisah jadi 2 proses/port
-sendiri-sendiri -- di-gabung jadi 1 app karena dua-duanya jalan di M1 yang sama,
-sama-sama numpang Ollama+ChromaDB (rag_common.py), dan gak ada alasan kuat buat
-nambah operational overhead (2 port, 2 proses buat di-manage/di-restart) padahal
-beda-nya cuma trigger (push per-alert dari n8n webhook vs pull terjadwal n8n
-Schedule Trigger) -- itu cukup dibedain di level ROUTE, bukan level proses.
-
-- POST /triage        -> Fase 1, dipanggil n8n tiap alert masuk (lihat triage()
-                          di bawah, logic-nya tetap di file ini -- ringan, gak
-                          butuh state).
-- POST /correlate/tick -> Fase 2, dipanggil n8n Schedule Trigger tiap ~15 menit.
-                          Logic (state SQLite, query Wazuh Indexer, clustering)
-                          ada di correlation_logic.py, run_correlation_tick().
-
-Retrieval RAG + Ollama client di-share dari rag_common.py buat kedua route.
-
-Usage: uvicorn api-service:app --host 0.0.0.0 --port 8000
-"""
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 import correlation_logic
 import rag_common
 
-GENERAL_RESULTS = 4
-MITRE_RESULTS = 3
+TRIAGE_N_PER_TYPE = {"mitre_attack": 2, "sigma_rule": 2, "yara_rule": 2, "cve_entry": 2, "thm_writeup": 1}
 
 app = FastAPI(title="SOC AI+RAG Service")
 
 
 def build_query_text(alert: dict) -> str:
-    """Susun teks semantik dari alert buat di-embed jadi query retrieval."""
     rule = alert.get("rule", {}) or {}
     parts = []
 
@@ -69,15 +45,27 @@ Agent: {agent.get('name', 'n/a')}
 Detail tambahan:
 {alert.get('enriched_summary', 'n/a')}
 
-=== KONTEKS DARI KNOWLEDGE BASE (Sigma/YARA/MITRE/CVE/THM) ===
+=== KONTEKS DARI KNOWLEDGE BASE ===
+Konteks di bawah datang dari sumber yang beda-beda, masing-masing peran beda -- JANGAN dicampur:
+- MITRE ATT&CK: satu-satunya sumber buat tactic/technique ID. Kalau blok ini kosong atau
+  gak match, jangan paksain technique ID, cukup sebut tactic-nya aja atau bilang gak yakin.
+- Sigma Rules: dipakai buat menduga KEMUNGKINAN ARAH SERANGAN LANJUTAN (bagian 3 di bawah),
+  bukan buat classification alert yang lagi ditriage sekarang -- pattern deteksi di Sigma
+  sering merepresentasikan fase serangan yang berdekatan/berikutnya.
+- YARA Rules: kalau ada yang relevan, sebutkan sebagai rekomendasi deteksi konkret.
+- CVE: sebutkan kalau ada kerentanan spesifik yang match sama pola alert ini.
+- THM Writeup: referensi/evaluasi tambahan, bobot paling rendah -- jangan jadi dasar
+  utama kesimpulan.
+
 {context}
 
 === TUGAS ===
 Susun triage singkat dengan format ini:
 1. **Ringkasan kejadian** — 2-3 kalimat, bahasa awam, apa yang kejadian ini sebenernya.
-2. **Kaitan MITRE ATT&CK** — tactic/technique yang paling relevan (pakai konteks di atas kalau ada), jelasin singkat.
-3. **Kemungkinan arah serangan selanjutnya** — berdasarkan tactic saat ini di kill-chain, fase apa yang biasanya menyusul (misal: kalau ini fase Execution, attacker biasanya lanjut ke Persistence/Privilege Escalation). Sebutkan tanda/log apa yang perlu dicek buat konfirmasi/deteksi fase lanjutannya.
-4. **Catatan konfidensi** — kalau konteks di atas lemah/gak nyambung, sebutin di sini.
+2. **Kaitan MITRE ATT&CK** — tactic/technique yang paling relevan (dari blok MITRE ATT&CK di atas kalau ada), jelasin singkat.
+3. **Kemungkinan arah serangan selanjutnya** — berdasarkan tactic saat ini di kill-chain, fase apa yang biasanya menyusul (pakai blok Sigma Rules kalau ada yang relevan). Sebutkan tanda/log apa yang perlu dicek buat konfirmasi/deteksi fase lanjutannya.
+4. **Rekomendasi deteksi & kerentanan terkait** — sebutkan YARA rule yang relevan (kalau ada) buat rekomendasi deteksi, dan CVE yang match (kalau ada) buat kemungkinan kerentanan yang dieksploitasi.
+5. **Catatan konfidensi** — kalau konteks di atas lemah/gak nyambung, sebutin di sini.
 """
 
 
@@ -86,13 +74,10 @@ async def triage(request: Request):
     alert = await request.json()
 
     try:
-        context = rag_common.retrieve_context(build_query_text(alert), general_n=GENERAL_RESULTS, mitre_n=MITRE_RESULTS)
+        context = rag_common.retrieve_context(build_query_text(alert), TRIAGE_N_PER_TYPE)
         prompt = build_prompt(alert, context)
         triage_text = rag_common.generate(prompt)
 
-        # Balikin alert asli + triage jadi satu object flat, biar node n8n
-        # setelah ini (Jira) gak perlu cross-reference ke node sebelumnya
-        # buat akses rule/enriched_summary — semua field udah ada di sini.
         return JSONResponse({**alert, "triage": triage_text})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -100,10 +85,6 @@ async def triage(request: Request):
 
 @app.post("/correlate/tick")
 async def correlate_tick():
-    """Dipanggil n8n Schedule Trigger tiap SILENCE_THRESHOLD_MINUTES/2-an menit
-    (disaranin 15 menit). 1 kali panggilan = 1 siklus penuh: tarik alert baru,
-    update clustering, lalu finalize incident yang udah 'diem' >= silence threshold.
-    n8n yang eksekusi Jira/Discord dari hasil finalized_incidents di response ini."""
     try:
         result = correlation_logic.run_correlation_tick()
         return JSONResponse(result)
