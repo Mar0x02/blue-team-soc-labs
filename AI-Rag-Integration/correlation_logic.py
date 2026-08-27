@@ -1,18 +1,3 @@
-"""
-correlation_logic.py - Fase 2: Full Chain Detection (korelasi lintas-alert & lintas-sensor)
-
-Logic murni (bukan FastAPI app) -- dipanggil dari api-service.py lewat run_correlation_tick().
-Query alert baru dari Wazuh Indexer (checkpoint incremental + overlap buffer), kelompokkan jadi
-event (tier-1 -- alert dari sensor beda yang nangkep 1 aksi nyata yang sama, gap super rapat) lalu
-incident (tier-2 -- event-event dalam 1 attack chain, rolling silence window).
-
-Saat incident difinalize, generate narrative korelasi via RAG+LLM (retrieval di-share dari
-rag_common.py, sama kayak endpoint /triage). Hasil (narrative + daftar alert_id anggota incident)
-dikembalikan ke pemanggil (api-service.py) -- pembuatan ticket Jira "Incident" + issue link + notif
-Discord tetap dieksekusi n8n, module ini SENGAJA gak nyimpen credential Jira/Discord sama sekali,
-biar semua integrasi ke sistem luar tetep di 1 tempat (n8n), konsisten sama Fase 1.
-"""
-
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -22,10 +7,7 @@ from opensearchpy import OpenSearch
 import correlation_state as state
 import rag_common
 
-# ============ CONFIG ============
-# Wazuh Indexer (OpenSearch) di Dell -- IP/credential dari env var, jangan hardcode
-# (lihat CLAUDE.md soal ini, IP hotspot/lab bisa berubah).
-WAZUH_INDEXER_HOST = os.environ.get("WAZUH_INDEXER_HOST", "localhost")
+WAZUH_INDEXER_HOST = os.environ.get("WAZUH_INDEXER_HOST", "")
 WAZUH_INDEXER_PORT = int(os.environ.get("WAZUH_INDEXER_PORT", "9200"))
 WAZUH_INDEXER_USER = os.environ.get("WAZUH_INDEXER_USER", "admin")
 WAZUH_INDEXER_PASSWORD = os.environ.get("WAZUH_INDEXER_PASSWORD", "")
@@ -35,14 +17,17 @@ WAZUH_ALERT_INDEX = os.environ.get("WAZUH_ALERT_INDEX", "wazuh-alerts-*")
 IP_HOST_MAPPING_PATH = os.environ.get("IP_HOST_MAPPING_PATH", "./ip-host-mapping.yml")
 CORRELATION_DB_PATH = os.environ.get("CORRELATION_DB_PATH", "./correlation_state.db")
 
-MIN_RULE_LEVEL = int(os.environ.get("MIN_RULE_LEVEL", "7"))                      # samain sama floor Fase 1
-INITIAL_LOOKBACK_MINUTES = int(os.environ.get("INITIAL_LOOKBACK_MINUTES", "60"))  # dipake cuma kalau belum ada checkpoint sama sekali
-OVERLAP_BUFFER_MINUTES = int(os.environ.get("OVERLAP_BUFFER_MINUTES", "2"))       # nutup indexing lag Wazuh Manager -> Indexer
-MICRO_CLUSTER_WINDOW_SECONDS = int(os.environ.get("MICRO_CLUSTER_WINDOW_SECONDS", "10"))  # tier-1: multi-sensor, 1 aksi sama (tentatif, blm ada data presisi)
-SILENCE_THRESHOLD_MINUTES = int(os.environ.get("SILENCE_THRESHOLD_MINUTES", "30"))        # tier-2: > gap terbesar (19m16s) yg kebukti masih 1 chain di lab Full Attack Chain
+MIN_RULE_LEVEL = int(os.environ.get("MIN_RULE_LEVEL", "7"))
+INITIAL_LOOKBACK_MINUTES = int(os.environ.get("INITIAL_LOOKBACK_MINUTES", "60"))
+OVERLAP_BUFFER_MINUTES = int(os.environ.get("OVERLAP_BUFFER_MINUTES", "2"))
+MICRO_CLUSTER_WINDOW_SECONDS = int(os.environ.get("MICRO_CLUSTER_WINDOW_SECONDS", "10"))
+SILENCE_THRESHOLD_MINUTES = int(os.environ.get("SILENCE_THRESHOLD_MINUTES", "30"))
 
-MAX_ALERTS_PER_TICK = 500  # safety cap query per cycle, biar gak overload Dell (8GB RAM)
-# ================================
+MAX_ALERTS_PER_TICK = 500
+
+CORRELATION_N_PER_TYPE = {"mitre_attack": 3, "sigma_rule": 3, "yara_rule": 3, "cve_entry": 3, "thm_writeup": 2}
+
+NARRATIVE_BACKEND = os.environ.get("NARRATIVE_BACKEND", "claude_cli")
 
 _opensearch_client: OpenSearch | None = None
 _ip_host_map: dict | None = None
@@ -55,14 +40,12 @@ def get_opensearch_client() -> OpenSearch:
             hosts=[{"host": WAZUH_INDEXER_HOST, "port": WAZUH_INDEXER_PORT}],
             http_auth=(WAZUH_INDEXER_USER, WAZUH_INDEXER_PASSWORD),
             use_ssl=True,
-            verify_certs=WAZUH_INDEXER_VERIFY_SSL,  # False = terima self-signed cert lab. JANGAN pakai gini di luar lab.
+            verify_certs=WAZUH_INDEXER_VERIFY_SSL,
         )
     return _opensearch_client
 
 
 def get_ip_host_map() -> dict:
-    """{ip: host_dict} dari ip-host-mapping.yml -- dipake buat resolve host dari
-    alert agentless (Suricata dst) yang cuma punya src_ip/dest_ip mentah."""
     global _ip_host_map
     if _ip_host_map is None:
         with open(IP_HOST_MAPPING_PATH) as f:
@@ -90,16 +73,6 @@ def query_new_alerts(query_from: str, query_to: str) -> list[dict]:
 
 
 def resolve_host(alert: dict) -> str | None:
-    """Resolve identitas host: alert agent-based langsung pake agent.name (udah
-    kanonik dari Wazuh sendiri, gak perlu lookup). Alert agentless (Suricata via
-    syslog forward pfSense, gak punya Wazuh Agent terdaftar) di-resolve dari IP
-    lewat ip-host-mapping.yml.
-
-    NOTE: agent.id == "000" diasumsikan konvensi Wazuh buat "manager-processed,
-    bukan agent terdaftar" -- dan path data.src_ip/data.dest_ip based on pola
-    decoder Suricata di Infrastructure/pfsense-suricata-setup.md. Dua-duanya BELUM
-    diverifikasi ke alert JSON asli di instance ini -- cek ke Dashboard/alerts.json
-    dan sesuaikan kalau ternyata beda."""
     agent = alert.get("agent", {}) or {}
     agent_id = agent.get("id")
     agent_name = agent.get("name")
@@ -118,9 +91,6 @@ def resolve_host(alert: dict) -> str | None:
 
 
 def derive_source_type(alert: dict) -> str:
-    """Best-effort klasifikasi sensor asal alert, buat narrative per-layer (network
-    vs host). BELUM diverifikasi ke alert JSON asli Suricata/auditd/FIM di instance
-    Wazuh ini -- sesuaikan kondisi di bawah kalau ternyata field-nya beda pas dites."""
     rule = alert.get("rule", {}) or {}
     groups = rule.get("groups", []) or []
     data = alert.get("data", {}) or {}
@@ -135,8 +105,6 @@ def derive_source_type(alert: dict) -> str:
 
 
 def extract_key_fields(alert: dict, source_type: str) -> dict:
-    """Ambil field indikator paling relevan sesuai jenis sensor -- best-effort,
-    sama seperti derive_source_type, perlu diverifikasi ke data asli."""
     data = alert.get("data", {}) or {}
 
     if source_type == "suricata_nids":
@@ -149,7 +117,9 @@ def extract_key_fields(alert: dict, source_type: str) -> dict:
     if source_type == "auditd":
         audit = data.get("audit", {}) or {}
         execve = audit.get("execve", {}) or {}
-        return {"command": execve.get("a0") or audit.get("exe")}
+        argv_keys = sorted((k for k in execve if k[:1] == "a" and k[1:].isdigit()), key=lambda k: int(k[1:]))
+        command = " ".join(execve[k] for k in argv_keys) if argv_keys else audit.get("exe")
+        return {"command": command}
     if source_type == "wazuh_fim":
         syscheck = alert.get("syscheck", {}) or {}
         return {"path": syscheck.get("path"), "event": syscheck.get("event")}
@@ -157,9 +127,6 @@ def extract_key_fields(alert: dict, source_type: str) -> dict:
 
 
 def ingest_new_alerts() -> int:
-    """Tarik alert baru dari Indexer (checkpoint + overlap buffer), dedup by
-    alert_id, resolve host, lalu join ke event/incident. Return jumlah alert baru
-    yang berhasil diproses (bukan yang di-skip karena dedup/host gak dikenal)."""
     conn = state.get_connection(CORRELATION_DB_PATH)
     now = datetime.now(timezone.utc)
     checkpoint = state.get_checkpoint(conn)
@@ -179,11 +146,11 @@ def ingest_new_alerts() -> int:
         if not alert_id or not timestamp:
             continue
         if state.is_processed(conn, alert_id):
-            continue  # udah pernah diproses cycle sebelumnya, ke-fetch lagi gara-gara overlap buffer
+            continue
 
         host_name = resolve_host(alert)
         if host_name is None:
-            continue  # host gak dikenal di ip-host-mapping.yml -- skip, bukan error
+            continue
 
         rule = alert.get("rule", {}) or {}
         source_type = derive_source_type(alert)
@@ -214,8 +181,15 @@ def ingest_new_alerts() -> int:
 
 
 def build_correlation_query_text(events_with_alerts: list[dict]) -> str:
-    descriptions = [a["rule_description"] for event in events_with_alerts for a in event["alerts"]]
-    return "\n".join(descriptions) if descriptions else "unknown multi-stage security incident"
+    lines = []
+    for event in events_with_alerts:
+        for a in event["alerts"]:
+            line = a["rule_description"]
+            if a["key_fields"] and a["key_fields"] != "{}":
+                line = f"{line} {a['key_fields']}"
+            lines.append(line)
+    unique_lines = list(dict.fromkeys(lines))
+    return "\n".join(unique_lines) if unique_lines else "unknown multi-stage security incident"
 
 
 def build_correlation_prompt(host_info: dict, events_with_alerts: list[dict], context: str) -> str:
@@ -246,6 +220,11 @@ ATURAN WAJIB:
   secara eksplisit -- jangan dipaksain jadi 1 cerita utuh.
 - Event yang punya >1 source (misal auditd + Suricata) itu 1 AKSI NYATA yang dikonfirmasi 2 sensor
   beda -- jelasin per-layer (network vs host), JANGAN dihitung jadi 2 langkah terpisah.
+- Alert-alert DALAM 1 Event yang sama adalah proses-proses BERBEDA yang tercatat nyaris bersamaan
+  (window waktu sangat singkat) di host yang sama -- kemungkinan besar bagian dari SATU rangkaian
+  eksekusi command yang sama (misal di-chain lewat `;`/`&&` dalam satu request), BUKAN aksi
+  independen yang gak berhubungan. ini fakta struktural dari cara alert dikelompokkan, BUKAN
+  kesimpulan keamanan -- kesimpulan soal berbahaya/tidaknya tetap kamu yang nentuin dari data.
 
 === KONTEKS HOST ===
 Host: {host_info.get('name', 'n/a')} ({host_info.get('ip', 'n/a')}, zona {host_info.get('zone', 'n/a')}, role {host_info.get('role', 'n/a')})
@@ -253,14 +232,27 @@ Host: {host_info.get('name', 'n/a')} ({host_info.get('ip', 'n/a')}, zona {host_i
 === TIMELINE EVENT (berurutan) ===
 {timeline_text}
 
-=== KONTEKS DARI KNOWLEDGE BASE (Sigma/YARA/MITRE/CVE/THM) ===
+=== KONTEKS DARI KNOWLEDGE BASE ===
+Konteks di bawah datang dari sumber yang beda-beda, masing-masing peran beda -- JANGAN dicampur:
+- MITRE ATT&CK: satu-satunya sumber buat tactic/technique ID per event (bagian 2 di bawah).
+  Kalau blok ini kosong/gak match buat suatu event, ikuti aturan "jangan paksain technique ID"
+  di atas -- cukup sebut tactic-nya aja atau bilang gak yakin.
+- Sigma Rules: dipakai buat menduga KEMUNGKINAN ARAH SERANGAN LANJUTAN (bagian 3) -- pattern
+  deteksi di Sigma sering merepresentasikan fase serangan yang berdekatan/berikutnya dari
+  chain yang udah kejadian, bukan buat classification event yang udah ada di timeline.
+- YARA Rules: kalau ada yang relevan, sebutkan sebagai REKOMENDASI deteksi konkret di bagian 4.
+- CVE: sebutkan di bagian 4 kalau ada kerentanan spesifik yang match sama pola serangan di
+  chain ini (endpoint/service yang disebut di alert).
+- THM Writeup: referensi/evaluasi tambahan, bobot PALING RENDAH -- jangan jadi dasar utama
+  kesimpulan manapun.
+
 {context}
 
 === OUTPUT YANG DIMINTA ===
 1. **Ringkasan kronologis** — naratif singkat per event, berurutan.
-2. **Klasifikasi tactic MITRE per event** — bukan technique ID kecuali yakin, sertakan catatan confidence.
-3. **Kesimpulan arah serangan keseluruhan** — sejauh mana chain ini berkembang (recon doang? sampai initial access? sampai privesc/exfiltrasi?).
-4. **Rekomendasi tindak lanjut** buat analyst.
+2. **Klasifikasi tactic MITRE per event** — bukan technique ID kecuali yakin (dari blok MITRE ATT&CK), sertakan catatan confidence.
+3. **Kesimpulan arah serangan keseluruhan** — sejauh mana chain ini berkembang (recon doang? sampai initial access? sampai privesc/exfiltrasi?), plus kemungkinan next step (pakai blok Sigma Rules kalau ada yang relevan).
+4. **Rekomendasi tindak lanjut** buat analyst — sebutkan YARA rule yang relevan (kalau ada) buat rekomendasi deteksi, dan CVE yang match (kalau ada) buat kemungkinan kerentanan yang dieksploitasi.
 5. **Catatan confidence keseluruhan** — transparan soal keterbatasan data/retrieval.
 """
 
@@ -289,9 +281,12 @@ def finalize_incident(conn, incident_row, host_map_by_name: dict) -> dict:
     host_info = host_map_by_name.get(incident_row["host_name"], {"name": incident_row["host_name"]})
 
     query_text = build_correlation_query_text(events_with_alerts)
-    context = rag_common.retrieve_context(query_text, general_n=6, mitre_n=4)
+    context = rag_common.retrieve_context(query_text, CORRELATION_N_PER_TYPE)
     prompt = build_correlation_prompt(host_info, events_with_alerts, context)
-    narrative = rag_common.generate(prompt)
+    if NARRATIVE_BACKEND == "claude_cli":
+        narrative = rag_common.generate_via_claude_cli(prompt)
+    else:
+        narrative = rag_common.generate(prompt)
 
     state.close_incident(conn, incident_row["incident_id"])
 
@@ -304,9 +299,6 @@ def finalize_incident(conn, incident_row, host_map_by_name: dict) -> dict:
 
 
 def run_correlation_tick() -> dict:
-    """1 siklus penuh: tarik alert baru, update clustering, lalu finalize incident
-    yang udah 'diem' >= silence threshold. Dipanggil dari route POST /correlate/tick
-    di api-service.py."""
     new_count = ingest_new_alerts()
 
     conn = state.get_connection(CORRELATION_DB_PATH)
