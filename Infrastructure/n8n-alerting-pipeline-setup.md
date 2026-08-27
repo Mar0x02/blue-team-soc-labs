@@ -176,7 +176,13 @@ sudo systemctl restart wazuh-manager
 
 Route korelasi Fase 2 (`POST /correlate/tick`, logic di `AI-Rag-Integration/correlation_logic.py`, di-serve bareng `/triage` dari `api-service.py`) perlu nyari ticket Jira Fase 1 per alert lewat JQL search pas nge-finalize sebuah incident (detail di [`n8n-correlation-workflow-setup.md`](./n8n-correlation-workflow-setup.md)). Buat itu bisa jalan, node **"Ticketing Jira"** (existing, dari Step 5) perlu nambahin ID unik tiap alert ke field **Description**.
 
-Wazuh nyimpen ID unik ini di field top-level `id` alert (**bukan** `rule.id` — itu ID rule/signature, bukan ID kejadian spesifik). Field ini ikut kebawa flat lewat `...alert` di node "Logic Enrichment Summary", jadi bisa diakses `{{ $json.id }}` di node-node setelahnya tanpa perubahan lain.
+Wazuh nyimpen ID unik ini di field top-level `id` alert (**bukan** `rule.id` — itu ID rule/signature, bukan ID kejadian spesifik). Field ini ikut kebawa flat lewat `...alert` di node "Logic Enrichment Summary", terus kebawa lagi lewat `...$json` di node "Set Priority" — jadi masih utuh sampai di situ.
+
+Node "Ticketing Jira" ada **setelah** node "AI + RAG Triage" (HTTP Request ke `/triage`) di chain. `jsonBody` node "AI + RAG Triage" cuma ngirim 3 field ke Python service (`rule`, `agent`, `enriched_summary`) — `id` gak ikut dikirim, jadi response `/triage` (yang nge-spread balik `{**alert, "triage": ...}`) otomatis gak bawa `id` juga. Efeknya `{{ $json.id }}` di node "Ticketing Jira" kosong.
+
+**Fix**: dari node "Ticketing Jira", ambil `id` langsung dari node **"Webhook"** (sumber paling awal, sebelum field-nya ilang) pakai cross-node reference — bukan `$json.id` dari output node sebelumnya (AI+RAG Triage). Konsisten sama pola fix Discord notif di Fase 2 ([`n8n-correlation-workflow-setup.md`](./n8n-correlation-workflow-setup.md)): field yang "ilang" lewat HTTP Request node diambil balik pakai `$('Nama Node')`, bukan nambah node perantara atau ubah payload `/triage`.
+
+⚠️ Node "Webhook" nyimpen payload mentah di dalem key `body` (struktur asli: `{headers, params, query, body, webhookUrl, executionMode}`), beda sama node-node setelah "Logic Enrichment Summary" yang udah di-flatten (`...alert` bikin field jadi top-level). Jadi harus akses `.body.id`, bukan `.id` langsung.
 
 Ubah expression **Description** di node "Ticketing Jira" jadi:
 
@@ -184,12 +190,10 @@ Ubah expression **Description** di node "Ticketing Jira" jadi:
 =Agent: "{{ $json.agent.name }}"
 Level: {{ $json.rule.level }}
 Rule ID: {{ $json.rule.id }}
-Alert ID: {{ $json.id }}
+Alert ID: {{ $('Webhook').item.json.body.id }}
 {{ $json.enriched_summary }}
 {{ $json.triage }}
 ```
-
-⚠️ **Belum divalidasi** — asumsi field top-level `id` beneran ada di payload yang dikirim Wazuh Integrator (harusnya iya, karena `custom-n8n.py` cuma `json.load()` file alert mentah tanpa strip field apapun sebelum di-POST), tapi belum dicek langsung ke eksekusi n8n asli. Cek tab **Executions** (klik salah satu run, lihat output node "Logic Enrichment Summary") buat mastiin `id` beneran muncul sebelum lanjut ke Fase 2.
 
 ---
 

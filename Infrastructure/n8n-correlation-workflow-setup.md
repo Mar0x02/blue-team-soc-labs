@@ -41,21 +41,23 @@ Cabang **false** gak perlu disambung kemana-mana (tick kosong, selesai).
 
 ### 4. Node — Split Out `Per Incident` (cabang true)
 
-Field to Split Out: `finalized_incidents`. Tiap item output sekarang = 1 incident (`incident_id`, `host_name`, `narrative`, `alert_ids`).
+Field to Split Out: `finalized_incidents`. Tiap item output **BUKAN** langsung jadi 1 incident flat di top-level — node Split Out n8n nge-wrap hasilnya balik ke key asal, jadi struktur aktualnya `{ finalized_incidents: {incident_id, host_name, narrative, alert_ids} }`. Node "Build JQL Query" (step 5) unwrap ini.
 
 ### 5. Node — Code `Build JQL Query`
 
 Gabungin semua `alert_ids` dalam 1 incident jadi satu query JQL (OR per alert, phrase match biar gak salah tokenize angka desimal `timestamp.counter` ala Wazuh):
 
 ```js
-const incident = $json;
+const incident = $json.finalized_incidents;
 const clauses = incident.alert_ids.map(id => `description ~ "\\"${id}\\""`);
 const jql = `project = KAN AND (${clauses.join(' OR ')})`;
 
 return { ...incident, jql };
 ```
 
-⚠️ **Belum divalidasi** — asumsi operator `~` (text search) Jira bisa exact-match ID kayak `1691425200.123456` kalau dibungkus phrase (`\"...\"`). Jira tokenizer bisa mecah angka di titik desimal; phrase search harusnya tetep match karena posisi token berurutan, tapi ini **perlu ditest ke instance Jira asli** sebelum dipercaya — kalau ternyata meleset, pertimbangkan JQL search satu-satu per `alert_id` (lebih lambat tapi lebih presisi) ketimbang di-OR sekaligus.
+Node "Split Out `Per Incident`" gak flatten field yang di-split ke top-level — tiap item output-nya `{ finalized_incidents: {incident_id, host_name, narrative, alert_ids} }`, bukan langsung `{incident_id, host_name, narrative, alert_ids}`. Karena itu, akses lewat `$json.finalized_incidents`, bukan `$json` langsung. Node setelahnya (`Create Incident Ticket`, `Push Notif Discord`) gak perlu diubah — `return { ...incident, jql }` di sini tetep flatten field-nya ke top-level output "Build JQL Query", jadi reference `$('Build JQL Query').item.json.host_name` dkk tetep valid.
+
+⚠️ Asumsi operator `~` (text search) Jira bisa exact-match ID kayak `1691425200.123456` kalau dibungkus phrase (`\"...\"`). Jira tokenizer bisa mecah angka di titik desimal; phrase search harusnya tetep match karena posisi token berurutan, tapi ini **perlu ditest ke instance Jira asli** sebelum dipercaya — kalau ternyata meleset, pertimbangkan JQL search satu-satu per `alert_id` (lebih lambat tapi lebih presisi) ketimbang di-OR sekaligus.
 
 ### 6. Node — HTTP Request `JQL Search Query`
 
