@@ -67,9 +67,11 @@ NET START WazuhSvc
 ### Dari Win7 (PowerShell atau Command Prompt):
 
 ```powershell
-Get-Content "C:\Program Files (x86)\ossec-agent\client.keys"
+Get-Content "C:\Program Files\ossec-agent\client.keys"
 # harus ada 1 baris: 001 WIN7-VICTIM <IP> <key>
 ```
+
+> Win7 ini 32-bit, jadi path agent-nya `Program Files` doang — **bukan** `Program Files (x86)` seperti di WIN AD yang 64-bit. Sama kayak WinXP (lihat [`winxp-wazuh-agent.md`](./winxp-wazuh-agent.md)).
 
 ### Dari Wazuh Dashboard:
 
@@ -83,7 +85,7 @@ Get-Content "C:\Program Files (x86)\ossec-agent\client.keys"
 |---------|----------------------|--------|
 | `Invoke-WebRequest` : command not found (padahal udah di PowerShell) | Win7 default PowerShell 2.0, `Invoke-WebRequest` baru ada di 3.0+ | Cek versi: `$PSVersionTable.PSVersion` → kalau `Major` = 2, download manual (Step 2), skip command generate dari wizard |
 | `msiexec /q` gagal / `dpkg`-setara di Windows gak jalan | PowerShell dibuka biasa, bukan **Run as administrator** | Buka ulang PowerShell/Command Prompt lewat **Run as administrator** |
-| `NET START WazuhSvc` → "The Wazuh service could not be started. The service did not report an error." | Error generik, gak jelas akar masalahnya | Cek log: `Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 30` |
+| `NET START WazuhSvc` → "The Wazuh service could not be started. The service did not report an error." | Error generik, gak jelas akar masalahnya | Cek log: `Get-Content "C:\Program Files\ossec-agent\ossec.log" -Tail 30` |
 | Log muncul `Invalid element in the configuration 'enrollment'` / `No Client configured` setelah edit manual `ossec.conf` | Typo atau nesting XML salah pas nambahin block `<enrollment>` manual | Kalau ragu edit XML manual, **skip aja** — pakai config utility bawaan installer (Step 3) yang auto-enroll pakai computer name, jauh lebih aman daripada edit `ossec.conf` manual |
 | Lupa password `Administrator` lokal Win7 | Gak pernah dicatat waktu install OS | Reset via `LAB\Administrator` (Computer Management → Local Users and Groups → Set Password) — lihat `win7-passwords.txt` |
 
