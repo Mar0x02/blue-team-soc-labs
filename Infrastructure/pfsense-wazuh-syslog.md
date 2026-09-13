@@ -179,4 +179,4 @@ ping 10.10.10.10
 
 Custom decoder (`local_decoder.xml`) dan rule (`local_rules.xml`) ini juga disalin ke `Detection-Engineer/wazuh/` di repo, biar ke-track sebagai detection engineering asset (bukan cuma nempel di server Dell doang, yang gak ke-backup/ke-version-control).
 
-Dengan ini, semua infrastructure monitoring lab udah lengkap: 5 endpoint agent (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) + pfSense syslog + Sysmon di WIN AD.
+Dengan ini, semua infrastructure monitoring lab udah lengkap: 5 endpoint agent (Ubuntu Host, Win7, WinXP, WIN AD, Web-Server) + pfSense syslog + Sysmon di WIN AD & Win7.
