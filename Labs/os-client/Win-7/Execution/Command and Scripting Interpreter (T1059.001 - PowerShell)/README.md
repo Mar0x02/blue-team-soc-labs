@@ -138,7 +138,7 @@ Detail yang menarik: `CreationUtcTime` (2026-07-11) **lebih tua** dari `Previous
 
 > **Pelajaran deteksi:** event 2 di sini adalah **false-positive-shaped signal**. Rule naif semacam "powershell.exe memicu FileCreateTime = timestomping" bakal nyala tiap kali powershell dijalankan. Ini justru bahan bagus buat ngerti kenapa exclusion di config Sysmon itu penting.
 
-![Event 2 FileCreateTime detail — TargetFilename Jump List](<./assets/5.png>)
+![Event 2 FileCreateTime detail — TargetFilename Jump List](<./assets/event 2 filecreatetime detail.png>)
 
 ---
 
