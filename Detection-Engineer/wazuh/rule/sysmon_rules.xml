@@ -1,0 +1,14 @@
+<group name="sysmon,">
+    <rule id="100601" level="12">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">1</field>
+        <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
+        <field name="win.eventdata.commandLine" type="pcre2">-EncodedCommand</field>
+        <field name="win.eventdata.commandLine" type="pcre2">-NoProfile</field>
+        <description>Sysmon: Command line execution of powershell.exe with -EncodedCommand and -NoProfile flags detected</description>
+        <mitre>
+            <id>T1059.001</id>
+        </mitre>
+        <group>command_injection,command_scripting,</group>
+    </rule>
+</group>
