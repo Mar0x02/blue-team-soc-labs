@@ -166,13 +166,61 @@ Konsekuensinya buat lab ini: di Win7 kita **gak bisa** ngandelin 4104. Yang ters
 
 Artinya deteksi harus jalan dari **command-line pattern** (`-EncodedCommand`, `-ExecutionPolicy Bypass`, `DownloadString`) dan **network behavior** (event 3 outbound), bukan dari isi script yang ter-decode.
 
-### Open item
+Gap "gak jadi alert" ini **sudah ditutup** dengan custom rule — lihat bagian berikutnya. Korelasi event 1 + event 3 (via `ProcessGuid`) masih disimpan buat pengembangan lanjutan.
 
-Kombinasi sinyal yang tersedia buat custom rule (belum dibuat — buat diskusi lanjutan):
+---
 
-- Event 1 dengan `win.eventdata.commandLine` mengandung `-EncodedCommand` / `-ExecutionPolicy Bypass` / `-NoProfile`.
-- Event 3 dengan `win.eventdata.image` = `powershell.exe` dan `win.eventdata.destinationIp` di luar subnet lab (koneksi C2-like) — perlu event 3 aktif di config Sysmon.
-- Korelasi keduanya via `ProcessGuid` yang sama = powershell yang di-launch encoded, lalu ngehubungi eksternal.
+## Custom Detection Rule — 100601
+
+Rule turunan yang naikin Sysmon Event 1 PowerShell-encoded jadi alert level 12. Disimpan di repo: [`Detection-Engineer/wazuh/rule/sysmon_rules.xml`](../../../../../Detection-Engineer/wazuh/rule/sysmon_rules.xml).
+
+```xml
+<group name="sysmon,">
+    <rule id="100601" level="12">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">1</field>
+        <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
+        <field name="win.eventdata.commandLine" type="pcre2">-EncodedCommand</field>
+        <field name="win.eventdata.commandLine" type="pcre2">-NoProfile</field>
+        <description>Sysmon: Command line execution of powershell.exe with -EncodedCommand and -NoProfile flags detected</description>
+        <mitre>
+            <id>T1059.001</id>
+        </mitre>
+        <group>command_injection,command_scripting,</group>
+    </rule>
+</group>
+```
+
+- **`if_sid` 61603** — chain dari rule bawaan Sysmon Event 1 (level 0), jadi decoding-nya diwarisi, rule ini tinggal nambah kondisi.
+- **Dua `<field>` di `commandLine`** — di-AND: command line wajib mengandung `-EncodedCommand` **dan** `-NoProfile`. Valid karena satu string bisa memuat dua substring.
+- **`win.system.eventID` 1** — redundant sama `if_sid` 61603 (yang udah mastiin event 1); disimpan sebagai self-documenting.
+
+### Pelajaran penting: decoder logtest ≠ decoder produksi
+
+Ini gotcha yang makan waktu paling lama, dan layak dicatat karena gampang ngejebak:
+
+- **`wazuh-logtest` (paste JSON mentah)** → event di-decode pakai decoder **`json`** generik. Rule bawaan Sysmon (`61603`) yang berbasis `windows_eventchannel` **gak fire** di sini — jadi kalau chain ke `61603`, di logtest kelihatan "cuma nyampe decoder".
+- **Produksi (agent forward beneran)** → event masuk lewat location `EventChannel` → di-decode pakai decoder **`windows_eventchannel`**. Di sinilah `61603` beneran fire (level 0), dan turunan `100601` ikut fire.
+
+Konsekuensinya: rule ini **gak bisa divalidasi via logtest** (karena logtest pakai `json`, `61603` gak ke-trigger). Validasinya **harus live**. Sempat dicoba pakai parent buatan sendiri `decoded_as json` biar lolos logtest — tapi itu justru bikin rule **bisu di produksi**, karena event live bukan `json`. Jadi keputusan final: chain ke `61603`, validasi langsung di Dashboard.
+
+### Hasil — alert live di Wazuh Dashboard
+
+Setelah rule dipasang di `local_rules.xml` (Dell) + restart `wazuh-manager`, trigger ulang command di Win7 → alert muncul di index `wazuh-alerts-*`:
+
+| Field | Nilai |
+|-------|-------|
+| `rule.id` | `100601` |
+| `rule.level` | `12` |
+| `rule.mitre.id` | `T1059.001` |
+| `rule.mitre.tactic` | `Execution` |
+| `agent.name` | `WIN7-VICTIM` (`10.10.20.10`) |
+| `decoder.name` | **`windows_eventchannel`** ← konfirmasi decoder produksi |
+| `location` | `EventChannel` |
+
+Field `decoder.name: windows_eventchannel` di alert live inilah bukti telak yang ngejawab kebingungan decoder di atas.
+
+![Wazuh Dashboard alert 100601](<./assets/wazuh dashboard alert 100601.png>)
 
 ---
 
@@ -180,4 +228,6 @@ Kombinasi sinyal yang tersedia buat custom rule (belum dibuat — buat diskusi l
 
 Eksekusi PowerShell download-cradle di Win7 berhasil disimulasikan dan **tertangkap Sysmon** dengan jejak yang lengkap: process creation (event 1) dengan command line utuh, koneksi outbound TCP ke C2 tiruan (event 3), plus event pendukung (2, 9) dan noise name-resolution (UDP 137 dari System). Chain pengiriman ke Wazuh Manager terverifikasi lewat `archives.log`.
 
-Gap-nya jelas dan sudah terdokumentasi: (1) rule bawaan Wazuh level 0 bikin event ini gak jadi alert, dan (2) PowerShell 2.0 di Win7 gak punya Script Block Logging, jadi deteksi harus bersandar ke command-line pattern + network behavior. Kedua hal ini jadi bahan diskusi buat menentukan custom detection rule.
+Gap "gak jadi alert" (rule bawaan level 0) **sudah ditutup** dengan custom rule `100601` — encoded PowerShell execution sekarang naik jadi alert level 12 di Dashboard, ter-map ke T1059.001. Sepanjang jalan ketemu pelajaran mahal: decoder di `wazuh-logtest` (`json`) beda dari decoder produksi (`windows_eventchannel`), jadi rule yang chain ke rule bawaan Sysmon **cuma bisa divalidasi live**, bukan lewat logtest.
+
+Keterbatasan yang tetap berlaku: PowerShell 2.0 di Win7 gak punya Script Block Logging (4104), jadi deteksi bersandar ke command-line pattern (`-EncodedCommand` + `-NoProfile`) — bukan isi script yang ter-decode. Pengembangan lanjutan: korelasi event 1 + event 3 (network outbound) via `ProcessGuid` buat true-positive yang lebih kuat.
