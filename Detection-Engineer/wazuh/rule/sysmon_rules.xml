@@ -11,4 +11,16 @@
         </mitre>
         <group>command_injection,command_scripting,</group>
     </rule>
+    <rule id="100602" level="14" timeframe="60">
+        <if_sid>61605, 92101</if_sid>
+        <if_matched_sid>100601</if_matched_sid>
+        <same_field>win.eventdata.processGuid</same_field>
+        <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
+        <description>Sysmon - Event 3: Network connection to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort) by $(win.eventdata.image) Outbound Connection from Powershell.exe -EncodedCommand before.</description>
+        <mitre>
+            <id>T1071.001</id>
+            <id>T1059.001</id>
+        </mitre>
+        <group>command_injection,command_scripting,command_and_control,</group>
+    </rule>
 </group>
