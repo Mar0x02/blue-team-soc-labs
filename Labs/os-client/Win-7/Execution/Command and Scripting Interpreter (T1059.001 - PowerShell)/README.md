@@ -166,7 +166,7 @@ Konsekuensinya buat lab ini: di Win7 kita **gak bisa** ngandelin 4104. Yang ters
 
 Artinya deteksi harus jalan dari **command-line pattern** (`-EncodedCommand`, `-ExecutionPolicy Bypass`, `DownloadString`) dan **network behavior** (event 3 outbound), bukan dari isi script yang ter-decode.
 
-Gap "gak jadi alert" ini **sudah ditutup** dengan custom rule — lihat bagian berikutnya. Korelasi event 1 + event 3 (via `ProcessGuid`) masih disimpan buat pengembangan lanjutan.
+Gap "gak jadi alert" ini **sudah ditutup** dengan custom rule `100601` (event 1), lalu diperkuat dengan rule korelasi `100602` (event 1 + event 3). Detailnya ada di dua bagian berikutnya.
 
 ---
 
@@ -206,7 +206,7 @@ Konsekuensinya: rule ini **gak bisa divalidasi via logtest** (karena logtest pak
 
 ### Hasil — alert live di Wazuh Dashboard
 
-Setelah rule dipasang di `local_rules.xml` (Dell) + restart `wazuh-manager`, trigger ulang command di Win7 → alert muncul di index `wazuh-alerts-*`:
+Setelah rule dipasang di `/var/ossec/etc/rules/sysmon_rules.xml` (Dell) + restart `wazuh-manager`, trigger ulang command di Win7 → alert muncul di index `wazuh-alerts-*`:
 
 | Field | Nilai |
 |-------|-------|
@@ -224,10 +224,124 @@ Field `decoder.name: windows_eventchannel` di alert live inilah bukti telak yang
 
 ---
 
+## Custom Correlation Rule — 100602 (Event 1 → Event 3)
+
+`100601` cuma bilang "ada PowerShell encoded yang jalan". Itu belum tentu jahat, karena script admin dan tool deployment juga sering pakai `-EncodedCommand`. Sinyal yang jauh lebih kuat: **proses PowerShell encoded yang sama langsung bikin koneksi keluar**. Itu pola download cradle atau C2 beacon yang ditiru di lab ini. Jadi `100602` mengkorelasikan event 1 (lewat `100601`) dengan event 3 (network connect) yang datang sesudahnya.
+
+```xml
+<rule id="100602" level="14" timeframe="60">
+    <if_sid>61605, 92101</if_sid>
+    <if_matched_sid>100601</if_matched_sid>
+    <same_field>win.eventdata.ProcessGuid</same_field>
+    <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
+    <description>Sysmon - Event 3: Network connection to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort) by $(win.eventdata.image) Outbound Connection from Powershell.exe -EncodedCommand before.</description>
+    <mitre>
+        <id>T1071.001</id>
+        <id>T1059.001</id>
+    </mitre>
+    <group>command_injection,command_scripting,command_and_control,</group>
+</rule>
+```
+
+| Tag | Fungsi |
+|-----|--------|
+| `<if_sid>61605, 92101</if_sid>` | Event yang **sedang masuk** harus event 3. Dua parent di sini dibaca **OR**, dan alasannya jadi inti temuan lab ini (lihat bawah). |
+| `<if_matched_sid>100601</if_matched_sid>` + `timeframe="60"` | Dalam 60 detik terakhir **harus sudah ada** alert `100601` (encoded PS). |
+| `<same_field>` | Ikat event 3 ke proses yang sama dengan event 1 yang di-match. |
+| `<field name="win.eventdata.image">` | Koneksinya harus dari `powershell.exe`. |
+| Level 14 | Lebih tinggi dari `100601` (12), karena dua sinyal berurutan lebih meyakinkan dari satu. |
+
+`if_sid` dan `if_matched_sid` punya peran berbeda. `if_sid` ngecek event yang **sekarang** masuk (event 3), sedangkan `if_matched_sid` ngecek event yang **sudah terjadi sebelumnya** (event 1 yang jadi `100601`). Jadi korelasi dua rule berbeda bisa dilakukan tanpa ngisi dua-duanya ke `if_sid`.
+
+### Problem: event 3 PowerShell "hilang" sebelum sampai ke rule kita
+
+Versi awal rule ini pakai `<if_sid>61605</if_sid>` saja, dan **gak pernah fire**. Yang bikin bingung, event 3-nya jelas ada:
+
+| Event 3 dari | Ada di `archives.log` | Jadi alert |
+|--------------|:---:|:---:|
+| `wazuh-agent.exe` → Dell:1514 | ✅ | ✅ |
+| `<unknown process>` → Kali:4000 | ✅ | ✅ |
+| `powershell.exe` → Kali:4000 | ✅ | ❌ |
+
+Bahkan rule debug paling polos (`level 3`, cuma `<if_sid>61605</if_sid>`, tanpa kondisi lain) tetap gak nangkep event 3 dari PowerShell. Beberapa dugaan dicek satu per satu dan gugur. Bukan `same_field`, bukan urutan event (event 1 masuk Manager 2 detik lebih dulu dari event 3, `eventRecordID` 2529 → 2531), dan bukan rule yang gagal ke-load.
+
+**Root cause:** rule bawaan Wazuh **92101** di `/var/ossec/ruleset/rules/0810-sysmon_id_3.xml`:
+
+```xml
+<rule id="92101" level="0">
+  <if_group>sysmon_event3</if_group>
+  <field name="win.eventdata.image" type="pcre2">(?i)\\powershell\.exe</field>
+  <field name="win.eventdata.protocol">^tcp$</field>
+  <options>no_full_log</options>
+  <description>Powershell process communicating over TCP</description>
+  ...
+</rule>
+```
+
+Rule `61605` (`0595-win-sysmon_rules.xml`) punya `<group>sysmon_event3,</group>`. Karena 92101 pakai `<if_group>sysmon_event3</if_group>`, dia ikut jadi **child 61605**, sejajar dengan rule custom kita. Wazuh ngecek child satu per satu sesuai urutan load, dan **child pertama yang match yang menang**. Rule bawaan di-load sebelum `etc/rules/`, jadi:
+
+```
+61605 (event 3, level 0)
+ ├─ 92101  (PowerShell + TCP, level 0)   ← dicek duluan, MATCH, berhenti di sini
+ └─ 100602 (custom)                      ← gak pernah dicek buat event PowerShell
+```
+
+Karena 92101 **level 0**, event-nya gak pernah jadi alert, jadi kelihatan seperti "hilang". Event dari `wazuh-agent.exe` dan `<unknown process>` gak match filter image 92101, makanya dua kasus itu tetap jatuh ke rule custom.
+
+Cara nemunya: grep `<if_sid>61605</if_sid>` di ruleset hasilnya **kosong**. Child-nya baru ketemu setelah grep lewat group:
+
+```bash
+sudo grep -rn -A8 'id="61605"' /var/ossec/ruleset/rules/                  # lihat <group> milik 61605
+sudo grep -rn -A12 '<if_group>sysmon_event3</if_group>' /var/ossec/ruleset/rules/
+```
+
+**Fix:** pasang rule custom di **dua jalur**, `<if_sid>61605, 92101</if_sid>`. Event PowerShell jalannya 61605 → 92101 → **100602**. Event dari proses lain jalannya 61605 → **100602**. Rule bawaan gak perlu diubah sama sekali. 92101 memang dirancang Wazuh sebagai pondasi (level 0, `no_full_log`) buat ditempelin rule lain di bawahnya.
+
+Anak bawaan 92101 juga dicek: **92102** (port `135`, DCOM/RPC) dan **92103** (port `389`, LDAP). Lab ini pakai port `4000`, jadi gak bentrok. Tapi kalau C2 lewat port 135/389, koneksinya bakal berhenti di 92102/92103 dan `100602` gak fire. Gap ini sengaja cuma dicatat dulu sampai ada skenario lab-nya.
+
+> **Pelajaran:** sebelum nulis custom rule di bawah rule bawaan, cek **semua** child parent-nya, lewat `<if_sid>` **dan** `<if_group>` (pakai nama group milik parent). Child bawaan yang lebih spesifik bisa diam-diam "nyerobot" event, apalagi kalau levelnya 0.
+
+### Temuan samping: `ProcessGuid` nol dan `<unknown process>`
+
+Di salah satu run, event 3 dari koneksi PowerShell ke Kali keluar seperti ini:
+
+```
+ProcessGuid: {00000000-0000-0000-0000-000000000000}
+ProcessId:   3920            ← sama dengan PID event 1
+Image:       <unknown process>
+```
+
+Sysmon nulis event network **belakangan**. `systemTime` sekitar 1,2 detik setelah `utcTime` koneksinya. Waktu nulis event itu, Sysmon nyari info proses berdasarkan PID. Download cradle umurnya pendek: `IEX ... DownloadString` jalan, lalu PowerShell langsung exit. Dugaannya, prosesnya udah hilang sebelum Sysmon sempat nyari, jadi `Image` dan `ProcessGuid` gak bisa diisi. Yang tetap benar cuma `ProcessId`. Kejadiannya gak selalu: di run lain GUID dan image-nya lengkap.
+
+Konsekuensinya buat `100602` versi sekarang: run seperti ini **gak akan ke-flag**, karena filter `image` powershell gak match `<unknown process>`, dan GUID nol gak sama dengan GUID event 1. Kalau mau nutup gap ini, alternatifnya ikat lewat `same_field win.eventdata.processId` dan buang filter `image`. PID adalah satu-satunya field yang konsisten di dua kondisi, dan dalam jendela 60 detik kecil kemungkinan PID dipakai ulang proses lain.
+
+### Hasil — alert korelasi live di Wazuh Dashboard
+
+Trigger ulang payload yang sama dari Step 2. Di `wazuh-alerts-*` muncul pasangan alert berurutan:
+
+| Field | `100601` (event 1) | `100602` (event 3) |
+|-------|--------------------|--------------------|
+| Waktu masuk Manager | 21:31:19.441 | 21:31:21.532 |
+| `UtcTime` (Sysmon) | 14:31:11.765 | 14:31:12.005 |
+| `ProcessGuid` | `{AF48A474-4B2F-6AAD-0000-0010904D1100}` | `{AF48A474-4B2F-6AAD-0000-0010904D1100}` |
+| `ProcessId` | 3364 | 3364 |
+| `Image` | `powershell.exe` | `powershell.exe` |
+| `destinationIp` | — | `192.168.43.111` (Kali) |
+
+Proses yang sama (GUID dan PID identik) bikin koneksi ke Kali **240 ms** setelah dibuat. Di Manager, `100601` tercatat duluan dan `100602` menyusul sekitar 2 detik kemudian, sesuai urutan yang dibutuhkan `if_matched_sid`.
+
+![Correlation alert 100601 → 100602 di Wazuh Dashboard](./assets/correlation_log_rule_alert_siem.png)
+
+> **Catatan validasi:** run ini membuktikan jalur `100601 → 100602` fire untuk pasangan event yang benar. Yang **belum** diuji terpisah adalah apakah `same_field` benar-benar menolak koneksi dari proses PowerShell **lain** dalam 60 detik yang sama (uji negatif). Perlu diperhatikan juga, decoder eventchannel ngeluarin nama field `processGuid` (huruf `p` kecil), sedangkan rule di atas menulis `ProcessGuid`.
+
+---
+
 ## Kesimpulan
 
 Eksekusi PowerShell download-cradle di Win7 berhasil disimulasikan dan **tertangkap Sysmon** dengan jejak yang lengkap: process creation (event 1) dengan command line utuh, koneksi outbound TCP ke C2 tiruan (event 3), plus event pendukung (2, 9) dan noise name-resolution (UDP 137 dari System). Chain pengiriman ke Wazuh Manager terverifikasi lewat `archives.log`.
 
 Gap "gak jadi alert" (rule bawaan level 0) **sudah ditutup** dengan custom rule `100601` — encoded PowerShell execution sekarang naik jadi alert level 12 di Dashboard, ter-map ke T1059.001. Sepanjang jalan ketemu pelajaran mahal: decoder di `wazuh-logtest` (`json`) beda dari decoder produksi (`windows_eventchannel`), jadi rule yang chain ke rule bawaan Sysmon **cuma bisa divalidasi live**, bukan lewat logtest.
 
-Keterbatasan yang tetap berlaku: PowerShell 2.0 di Win7 gak punya Script Block Logging (4104), jadi deteksi bersandar ke command-line pattern (`-EncodedCommand` + `-NoProfile`) — bukan isi script yang ter-decode. Pengembangan lanjutan: korelasi event 1 + event 3 (network outbound) via `ProcessGuid` buat true-positive yang lebih kuat.
+Deteksi lalu diperkuat dengan rule korelasi `100602`: encoded PowerShell (`100601`) yang dalam 60 detik bikin koneksi keluar dari proses yang sama naik jadi alert level 14 (T1071.001 + T1059.001). Pelajaran terbesarnya bukan di sintaks korelasi, tapi di **struktur pohon rule**. Rule bawaan 92101 (level 0) nempel ke 61605 lewat `if_group`, lalu diam-diam nangkep semua koneksi TCP PowerShell sebelum rule custom sempat dicek. Fix-nya: pasang rule custom di dua jalur (`61605, 92101`), tanpa ngubah rule bawaan.
+
+Keterbatasan yang tetap berlaku: PowerShell 2.0 di Win7 gak punya Script Block Logging (4104), jadi deteksi bersandar ke command-line pattern (`-EncodedCommand` + `-NoProfile`) — bukan isi script yang ter-decode. Di sisi network, Sysmon kadang gagal ngisi `Image`/`ProcessGuid` di event 3 buat proses yang umurnya pendek (`<unknown process>`), jadi korelasi berbasis GUID dan image bisa bolong di run seperti itu.
