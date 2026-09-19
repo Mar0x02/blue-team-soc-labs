@@ -3,18 +3,29 @@
         <if_sid>61603</if_sid>
         <field name="win.system.eventID" type="pcre2">1</field>
         <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
-        <field name="win.eventdata.commandLine" type="pcre2">-EncodedCommand</field>
-        <field name="win.eventdata.commandLine" type="pcre2">-NoProfile</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)\s[-/]e[a-z]*\s+[A-Za-z0-9+/]{20,}={0,2}</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)-NoProfile|-nop</field>
         <description>Sysmon: Command line execution of powershell.exe with -EncodedCommand and -NoProfile flags detected</description>
         <mitre>
             <id>T1059.001</id>
         </mitre>
-        <group>command_injection,command_scripting,</group>
+        <group>command_injection,command_scripting,powershell_suspicious_exec,</group>
+    </rule>
+    <rule id="100603" level="12">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">1</field>
+        <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)DownloadString|DownloadFile|DownloadData|Net\.WebClient</field>
+        <description>Sysmon: Command line execution of powershell.exe with DownloadString, DownloadFile, DownloadData, or Net.WebClient detected</description>
+        <mitre>
+            <id>T1059.001</id>
+        </mitre>
+        <group>command_injection,command_scripting,powershell_suspicious_exec,</group>
     </rule>
     <rule id="100602" level="14" timeframe="60">
         <if_sid>61605, 92101</if_sid>
-        <if_matched_sid>100601</if_matched_sid>
-        <same_field>win.eventdata.processGuid</same_field>
+        <if_matched_group>powershell_suspicious_exec</if_matched_group>
+        <same_field>win.eventdata.ProcessGuid</same_field>
         <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
         <description>Sysmon - Event 3: Network connection to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort) by $(win.eventdata.image) Outbound Connection from Powershell.exe -EncodedCommand before.</description>
         <mitre>
