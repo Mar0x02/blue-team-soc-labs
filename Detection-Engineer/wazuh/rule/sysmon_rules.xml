@@ -34,4 +34,17 @@
         </mitre>
         <group>command_injection,command_scripting,command_and_control,</group>
     </rule>
+    <rule id="100605" level="6">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">^1$</field>
+        <field name="win.eventdata.image" type="pcre2">(?i)\\schtasks\.exe$</field>
+        <field name="win.eventdata.parentImage" type="pcre2">(?i)(?:powershell|cmd)\.exe$</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)schtasks(?:\.exe)?\W+[/-](?:create|change)\b</field>
+        <field name="win.eventdata.commandLine" type="pcre2">(?i)/tr\s+\S*(?:powershell|pwsh)</field>
+        <description>Sysmon: Suspicious schtasks execution detected</description>
+        <mitre>
+            <id>T1053.005</id>
+        </mitre>
+        <group>scheduled_task,</group>
+    </rule>
 </group>
