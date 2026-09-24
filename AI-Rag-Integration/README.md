@@ -13,7 +13,7 @@ AI-Rag-Integration/
 ├── ingest-yml.py         # Ingest Sigma rules (.yml/.yaml)
 ├── ingest-mitre.py       # Ingest MITRE ATT&CK (JSON/STIX)
 ├── ingest-cve.py         # Ingest CVE database (JSON v5)
-├── api-service.py        # FastAPI: POST /triage (Fase 1) + POST /correlate/tick (Fase 2)
+├── api-service.py        # FastAPI: POST /triage (Fase 1) + POST /correlate/tick (Fase 2) + POST /notify/cross-decoder
 ├── rag_common.py         # Shared retrieval ChromaDB + Ollama client (dipakai api-service.py & correlation_logic.py)
 ├── correlation_logic.py  # Logic korelasi Fase 2 (clustering, query Wazuh Indexer, narrative)
 ├── correlation_state.py  # SQLite state Fase 2 (checkpoint, dedup, event/incident)
@@ -368,9 +368,9 @@ python ingest-cve.py
 
 ---
 
-## `api-service.py` — SOC AI+RAG API (Fase 1 triage + Fase 2 korelasi)
+## `api-service.py` — SOC AI+RAG API (Fase 1 triage + Fase 2 korelasi + notifikasi cross-decoder)
 
-FastAPI service **tunggal** yang serve `POST /triage` (Fase 1) dan `POST /correlate/tick` (Fase 2). Awalnya didesain 2 proses/port terpisah, digabung jadi 1 service karena dua-duanya jalan di M1 yang sama & sama-sama numpang Ollama+ChromaDB (`rag_common.py`) — gak ada alasan kuat buat overhead 2 proses yang perlu di-manage/di-restart terpisah. Bedanya cuma di level route, bukan level proses: `/triage` dipanggil n8n tiap alert masuk (push, stateless), `/correlate/tick` dipanggil n8n Schedule Trigger tiap ~15 menit (pull, stateful lewat `correlation_state.py`).
+FastAPI service **tunggal** yang serve `POST /triage` (Fase 1), `POST /correlate/tick` (Fase 2), dan `POST /notify/cross-decoder`. Awalnya didesain 2 proses/port terpisah, digabung jadi 1 service karena dua-duanya jalan di M1 yang sama & sama-sama numpang Ollama+ChromaDB (`rag_common.py`) — gak ada alasan kuat buat overhead 2 proses yang perlu di-manage/di-restart terpisah. Bedanya cuma di level route, bukan level proses: `/triage` dipanggil n8n tiap alert masuk (push, stateless), `/correlate/tick` dipanggil n8n Schedule Trigger tiap ~15 menit (pull, stateful lewat `correlation_state.py`).
 
 ```bash
 uvicorn api-service:app --host 0.0.0.0 --port 8000
@@ -383,6 +383,7 @@ uvicorn api-service:app --host 0.0.0.0 --port 8000
 | Retrieval | 2 query: umum (4 hasil, semua tipe) + khusus `type: mitre_attack` (3 hasil, buat dasar analisis arah serangan) |
 | `temperature` | `0.2` — rendah sengaja, biar hasil triage konsisten/faktual, bukan variatif (default Ollama ~0.8 kekreatif buat task ini) |
 | `num_ctx` | `8192` — default Ollama sering 2048, bisa motong konteks RAG diam-diam (tanpa error) kalau gak di-set eksplisit |
+| Batas input prompt | `enriched_summary` dipotong 4000 char (prompt) & 1200 char (query embedding) lewat `TRIAGE_SUMMARY_MAX_CHARS`/`TRIAGE_QUERY_SUMMARY_MAX_CHARS` — ukuran alert Wazuh gak ada batasnya, dan prompt yang ikut ngembung bikin Ollama nolak dengan `input length exceeds the context length` |
 | `seed` | `42` — biar alert yang persis sama hasil triage-nya konsisten antar run |
 
 **Kenapa `llama3.2:3b`, bukan `qwen2.5:4b`** (padahal tabel stack model di root README nyebut `qwen2.5:4b` buat "RAG pipeline & threat intelligence"): dari pengalaman coba `qwen2.5:4b` di LM Studio sebelumnya, responsnya berat/lambat bahkan buat prompt sesimpel "halo". `llama3.2:3b` dicoba sebagai alternatif dan ✅ **confirmed** hasilnya bagus & responsif buat kebutuhan triage ini (format 4 poin ke-follow dengan baik, bahasa natural). Keputusan berbasis testing langsung, bukan asumsi dari rencana awal.
@@ -390,6 +391,16 @@ uvicorn api-service:app --host 0.0.0.0 --port 8000
 **Endpoint:**
 - `POST /triage` — body: JSON hasil enrichment dari Code node n8n (`rule`, `data`, `agent`, `enriched_summary`). Return: alert asli **+ field `triage`** jadi satu object flat (bukan cuma `{"triage": "..."}`) — biar node n8n setelahnya (Jira) langsung bisa akses `{{ $json.rule.description }}` dst tanpa perlu cross-reference ke node sebelumnya.
 - `POST /correlate/tick` — Fase 2, korelasi lintas-alert/lintas-sensor jadi "full chain detection". Logic-nya (query Wazuh Indexer, clustering event/incident, generate narrative) ada di `correlation_logic.py` + state SQLite `correlation_state.py`, resolve host lewat `ip-host-mapping.yml`. Return: `{"new_alerts_processed": <int>, "finalized_incidents": [{"incident_id", "host_name", "narrative", "alert_ids"}]}`. Detail arsitektur & setup workflow n8n-nya ada di [`Infrastructure/n8n-correlation-workflow-setup.md`](../Infrastructure/n8n-correlation-workflow-setup.md).
+- `POST /notify/cross-decoder` — body: alert Wazuh apa adanya. Masangin alert korelasi lintas decoder sama alert eksekusi yang mendahuluinya, supaya notifikasi bawa konteks yang gak dipunya alert korelasi itu sendiri.
+
+  Perannya ditentukan dari `rule.id`: yang ada di `CROSS_DECODER_EXEC_RULE_IDS` (default `100605`) **disimpan** ke tabel `pending_exec_alerts`, yang ada di `CROSS_DECODER_CORR_RULE_IDS` (default `100604`) **narik** konteksnya dan ngerakit pesan siap kirim. Rule lain dibalikin `{"action": "ignored"}`.
+
+  Kenapa perlu: alert korelasi `100604` dipicu event Security 4698, jadi dia gak bawa field Sysmon — `commandLine` yang isinya payload `/tr` gak ada di situ. Join-nya pakai **nama task**, yang di dua sumber itu beda bentuk (`/tn` di dalam `commandLine` vs field `taskName` berawalan backslash), sesuatu yang `same_field` di Wazuh gak bisa lakuin. Kalau nama task gak nyambung, fallback ke host + jendela waktu dan pesannya dikasih penanda bahwa pasangannya ditebak dari waktu.
+
+  Return: `{"action", "notify", "matched", "match_type", "exec_alert", "message"}`. Node IF di n8n cukup baca `notify`, node Discord cukup baca `message`.
+
+  Env: `CROSS_DECODER_WINDOW_SECONDS` (default 300), `CROSS_DECODER_RETENTION_SECONDS` (1800), `CROSS_DECODER_LOOKUP_RETRIES` (3), `CROSS_DECODER_LOOKUP_RETRY_DELAY` (0.5), `DISCORD_MESSAGE_MAX_CHARS` (1900).
+
 - `GET /health` — cek koneksi ChromaDB, return `collection_count`.
 
 ---

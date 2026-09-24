@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS incidents (
     last_seen_ts TEXT NOT NULL,
     finalized_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS pending_exec_alerts (
+    alert_id TEXT PRIMARY KEY,
+    host_name TEXT NOT NULL,
+    task_key TEXT,
+    timestamp TEXT NOT NULL,
+    rule_id TEXT,
+    payload TEXT NOT NULL
+);
 """
 
 
@@ -193,3 +202,73 @@ def close_incident(conn: sqlite3.Connection, incident_id: str):
         (_now_iso(), incident_id),
     )
     conn.commit()
+
+
+def record_pending_exec(
+    conn: sqlite3.Connection,
+    alert_id: str,
+    host_name: str,
+    task_key: str | None,
+    timestamp: str,
+    rule_id: str,
+    payload: dict,
+):
+    """Simpen alert eksekusi (Sysmon event 1) yang nunggu dipasangin alert korelasi
+    dari decoder lain. Timestamp WAJIB sudah dinormalisasi ke UTC ISO sama pemanggil,
+    karena pencarian pasangannya ngitung selisih detik antar dua alert."""
+    conn.execute(
+        "INSERT INTO pending_exec_alerts (alert_id, host_name, task_key, timestamp, rule_id, payload) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(alert_id) DO UPDATE SET "
+        "host_name = excluded.host_name, task_key = excluded.task_key, "
+        "timestamp = excluded.timestamp, rule_id = excluded.rule_id, payload = excluded.payload",
+        (alert_id, host_name, task_key, timestamp, rule_id, json.dumps(payload)),
+    )
+    conn.commit()
+
+
+def find_pending_exec_by_task(
+    conn: sqlite3.Connection, host_name: str, task_key: str, alert_ts: str, window_seconds: int
+) -> sqlite3.Row | None:
+    rows = conn.execute(
+        "SELECT * FROM pending_exec_alerts WHERE host_name = ? AND task_key = ? ORDER BY timestamp DESC",
+        (host_name, task_key),
+    ).fetchall()
+    return _first_within_window(rows, alert_ts, window_seconds)
+
+
+def find_latest_pending_exec(
+    conn: sqlite3.Connection, host_name: str, alert_ts: str, window_seconds: int
+) -> sqlite3.Row | None:
+    rows = conn.execute(
+        "SELECT * FROM pending_exec_alerts WHERE host_name = ? ORDER BY timestamp DESC",
+        (host_name,),
+    ).fetchall()
+    return _first_within_window(rows, alert_ts, window_seconds)
+
+
+def _first_within_window(rows: list[sqlite3.Row], alert_ts: str, window_seconds: int) -> sqlite3.Row | None:
+    for row in rows:
+        gap = (datetime.fromisoformat(alert_ts) - datetime.fromisoformat(row["timestamp"])).total_seconds()
+        if 0 <= gap <= window_seconds:
+            return row
+    return None
+
+
+def delete_pending_exec(conn: sqlite3.Connection, alert_id: str):
+    conn.execute("DELETE FROM pending_exec_alerts WHERE alert_id = ?", (alert_id,))
+    conn.commit()
+
+
+def prune_pending_exec(conn: sqlite3.Connection, retention_seconds: int) -> int:
+    """Buang alert eksekusi yang gak pernah kepasangin. Tanpa ini tabelnya numpuk dan
+    fallback pencocokan per-host bisa narik alert basi dari jam-jam sebelumnya."""
+    now = datetime.now(timezone.utc)
+    deleted = 0
+    for row in conn.execute("SELECT alert_id, timestamp FROM pending_exec_alerts").fetchall():
+        if (now - datetime.fromisoformat(row["timestamp"])).total_seconds() > retention_seconds:
+            conn.execute("DELETE FROM pending_exec_alerts WHERE alert_id = ?", (row["alert_id"],))
+            deleted += 1
+    if deleted:
+        conn.commit()
+    return deleted
