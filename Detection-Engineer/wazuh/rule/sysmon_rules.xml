@@ -34,7 +34,7 @@
         </mitre>
         <group>command_injection,command_scripting,command_and_control,</group>
     </rule>
-    <rule id="100605" level="6">
+    <rule id="100605" level="10">
         <if_sid>61603</if_sid>
         <field name="win.system.eventID" type="pcre2">^1$</field>
         <field name="win.eventdata.image" type="pcre2">(?i)\\schtasks\.exe$</field>
@@ -46,5 +46,14 @@
             <id>T1053.005</id>
         </mitre>
         <group>scheduled_task,</group>
+    </rule>
+    <rule id="100604" level="12" timeframe="60">
+        <if_sid>60228</if_sid>
+        <if_matched_sid>100605</if_matched_sid>
+        <description>Scheduled task creation confirmed: schtasks.exe spawned a PowerShell task (Sysmon 1) followed by Security 4698 task registration</description>
+        <mitre>
+            <id>T1053.005</id>
+        </mitre>
+        <group>scheduled_task,persistence,notify_discord,</group>
     </rule>
 </group>
