@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-import asyncio
 import json
 import os
 import re
@@ -26,8 +25,6 @@ EXEC_RULE_IDS = {r.strip() for r in os.environ.get("CROSS_DECODER_EXEC_RULE_IDS"
 CORR_RULE_IDS = {r.strip() for r in os.environ.get("CROSS_DECODER_CORR_RULE_IDS", "100604").split(",") if r.strip()}
 CROSS_DECODER_WINDOW_SECONDS = int(os.environ.get("CROSS_DECODER_WINDOW_SECONDS", "300"))
 CROSS_DECODER_RETENTION_SECONDS = int(os.environ.get("CROSS_DECODER_RETENTION_SECONDS", "1800"))
-CROSS_DECODER_LOOKUP_RETRIES = int(os.environ.get("CROSS_DECODER_LOOKUP_RETRIES", "3"))
-CROSS_DECODER_LOOKUP_RETRY_DELAY = float(os.environ.get("CROSS_DECODER_LOOKUP_RETRY_DELAY", "0.5"))
 COMMAND_LINE_MAX_CHARS = 800
 DISCORD_MESSAGE_MAX_CHARS = int(os.environ.get("DISCORD_MESSAGE_MAX_CHARS", "1900"))
 
@@ -188,17 +185,31 @@ def _exec_payload(alert: dict, eventdata: dict) -> dict:
     }
 
 
-def _build_notification(alert: dict, exec_payload: dict | None, match_type: str | None) -> str:
+def _corr_payload(alert: dict, eventdata: dict) -> dict:
     rule = alert.get("rule", {}) or {}
     agent = alert.get("agent", {}) or {}
-    eventdata = _eventdata(alert)
-    task_name = (exec_payload or {}).get("task_name") or eventdata.get("taskName") or "n/a"
+    return {
+        "rule_id": str(rule.get("id", "")),
+        "rule_description": rule.get("description"),
+        "rule_level": rule.get("level"),
+        "agent_name": agent.get("name"),
+        "timestamp": alert.get("timestamp"),
+        "task_name": eventdata.get("taskName"),
+    }
+
+
+def _build_notification(corr: dict, exec_payload: dict | None, match_type: str | None) -> str:
+    """Pesan selalu disusun dari sudut pandang alert korelasi, walau yang nyampe belakangan
+    (dan jadi pemicu notif ini) alert eksekusi -- makanya `corr` dilempar sebagai payload,
+    bukan diambil dari alert yang lagi diproses."""
+    task_name = (exec_payload or {}).get("task_name") or corr.get("task_name") or "n/a"
 
     lines = [
-        f"\U0001f6a8 **{rule.get('description', 'Cross-decoder correlation')}**",
-        f"Host: `{agent.get('name', 'n/a')}` | Rule: `{rule.get('id', 'n/a')}` (level {rule.get('level', 'n/a')})",
+        f"\U0001f6a8 **{corr.get('rule_description') or 'Cross-decoder correlation'}**",
+        f"Host: `{corr.get('agent_name') or 'n/a'}` | Rule: `{corr.get('rule_id') or 'n/a'}` "
+        f"(level {corr.get('rule_level', 'n/a')})",
         f"Task: `{task_name}`",
-        f"Waktu: {alert.get('timestamp', 'n/a')}",
+        f"Waktu: {corr.get('timestamp') or 'n/a'}",
     ]
 
     if exec_payload:
@@ -230,9 +241,11 @@ async def notify_cross_decoder(request: Request):
     """Pasangin alert korelasi lintas decoder sama alert eksekusi yang mendahuluinya.
 
     Alert korelasi dipicu event dari decoder lain (Security 4698), jadi dia gak bawa field
-    Sysmon yang isinya payload task. Route ini yang nyatuin: alert eksekusi disimpan dulu,
-    alert korelasi datang belakangan dan narik konteksnya. Pengikatannya pakai nama task,
+    Sysmon yang isinya payload task. Route ini yang nyatuin. Pengikatannya pakai nama task,
     yang di dua alert itu namanya beda field -- sesuatu yang `same_field` di Wazuh gak bisa.
+
+    Jalurnya simetris: sisi mana pun yang nyampe duluan bakal nyimpen dan balik
+    `notify: false`, sisi yang nyampe belakangan yang masangin dan ngirim notifikasi.
     """
     alert = await request.json()
     rule = alert.get("rule", {}) or {}
@@ -241,70 +254,98 @@ async def notify_cross_decoder(request: Request):
     timestamp = _parse_ts_utc(alert.get("timestamp"))
     eventdata = _eventdata(alert)
 
+    if rule_id in EXEC_RULE_IDS:
+        kind, counterpart_kind = "exec", "corr"
+        own_payload = _exec_payload(alert, eventdata)
+        task_key = _task_key_from_command_line(eventdata.get("commandLine"))
+    elif rule_id in CORR_RULE_IDS:
+        kind, counterpart_kind = "corr", "exec"
+        own_payload = _corr_payload(alert, eventdata)
+        task_key = _normalize_task_key(eventdata.get("taskName"))
+    else:
+        return JSONResponse({"action": "ignored", "notify": False, "rule_id": rule_id})
+
     try:
-        if rule_id in EXEC_RULE_IDS:
-            payload = _exec_payload(alert, eventdata)
-            task_key = _task_key_from_command_line(eventdata.get("commandLine"))
-            conn = state.get_connection(correlation_logic.CORRELATION_DB_PATH)
-            try:
-                state.record_pending_exec(
-                    conn,
-                    alert_id=str(alert.get("id", "")) or f"{host_name}:{timestamp}",
-                    host_name=host_name,
-                    task_key=task_key,
-                    timestamp=timestamp,
-                    rule_id=rule_id,
-                    payload=payload,
-                )
-                pruned = state.prune_pending_exec(conn, CROSS_DECODER_RETENTION_SECONDS)
-            finally:
-                conn.close()
-            return JSONResponse(
-                {"action": "stored", "notify": False, "rule_id": rule_id, "task_key": task_key, "pruned": pruned}
+        conn = state.get_connection(correlation_logic.CORRELATION_DB_PATH)
+        try:
+            row, match_type = state.pair_or_store_cross_decoder(
+                conn,
+                alert_id=str(alert.get("id", "")) or f"{host_name}:{timestamp}",
+                kind=kind,
+                counterpart_kind=counterpart_kind,
+                host_name=host_name,
+                task_key=task_key,
+                timestamp=timestamp,
+                rule_id=rule_id,
+                payload=own_payload,
+                window_seconds=CROSS_DECODER_WINDOW_SECONDS,
             )
+            pruned = state.prune_pending_cross_decoder(conn, CROSS_DECODER_RETENTION_SECONDS)
+        finally:
+            conn.close()
 
-        if rule_id in CORR_RULE_IDS:
-            task_key = _normalize_task_key(eventdata.get("taskName"))
-            row = None
-            match_type = None
-
-            for attempt in range(CROSS_DECODER_LOOKUP_RETRIES):
-                conn = state.get_connection(correlation_logic.CORRELATION_DB_PATH)
-                try:
-                    if task_key:
-                        row = state.find_pending_exec_by_task(
-                            conn, host_name, task_key, timestamp, CROSS_DECODER_WINDOW_SECONDS
-                        )
-                        match_type = "task_name" if row else None
-                    if row is None:
-                        row = state.find_latest_pending_exec(
-                            conn, host_name, timestamp, CROSS_DECODER_WINDOW_SECONDS
-                        )
-                        match_type = "host_window" if row else None
-                    if row is not None:
-                        state.delete_pending_exec(conn, row["alert_id"])
-                finally:
-                    conn.close()
-                if row is not None or attempt == CROSS_DECODER_LOOKUP_RETRIES - 1:
-                    break
-                await asyncio.sleep(CROSS_DECODER_LOOKUP_RETRY_DELAY)
-
-            exec_payload = json.loads(row["payload"]) if row is not None else None
+        if row is None:
             return JSONResponse(
                 {
-                    "action": "notify",
-                    "notify": True,
-                    "matched": row is not None,
-                    "match_type": match_type,
+                    "action": "stored",
+                    "notify": False,
+                    "kind": kind,
                     "rule_id": rule_id,
-                    "host_name": host_name,
                     "task_key": task_key,
-                    "exec_alert": exec_payload,
-                    "message": _build_notification(alert, exec_payload, match_type),
+                    "pruned": pruned,
                 }
             )
 
-        return JSONResponse({"action": "ignored", "notify": False, "rule_id": rule_id})
+        counterpart = json.loads(row["payload"])
+        corr_payload, exec_payload = (
+            (own_payload, counterpart) if kind == "corr" else (counterpart, own_payload)
+        )
+        return JSONResponse(
+            {
+                "action": "notify",
+                "notify": True,
+                "matched": True,
+                "match_type": match_type,
+                "paired_by": kind,
+                "rule_id": rule_id,
+                "host_name": host_name,
+                "task_key": task_key,
+                "exec_alert": exec_payload,
+                "message": _build_notification(corr_payload, exec_payload, match_type),
+            }
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/notify/cross-decoder/sweep")
+async def notify_cross_decoder_sweep():
+    """Keluarin alert korelasi yang pasangannya gak pernah nyampe.
+
+    Dengan pengikatan simetris, alert yang nyampe duluan nunggu di tabel pending tanpa
+    kirim apa-apa. Kalau pasangannya gak pernah dateng (agent putus, rule eksekusi ketahan
+    threshold Integrator), alert korelasinya bakal diem selamanya -- padahal itu level 12.
+    Endpoint ini yang ngeluarin mereka sebagai notif tanpa konteks, dipanggil terjadwal,
+    bukan per-alert, karena batas "nyerah nunggu" itu soal waktu, bukan soal ada alert baru.
+    """
+    try:
+        conn = state.get_connection(correlation_logic.CORRELATION_DB_PATH)
+        try:
+            expired = state.take_expired_pending(conn, "corr", CROSS_DECODER_WINDOW_SECONDS)
+            pruned = state.prune_pending_cross_decoder(conn, CROSS_DECODER_RETENTION_SECONDS)
+        finally:
+            conn.close()
+
+        messages = [_build_notification(json.loads(row["payload"]), None, None) for row in expired]
+        return JSONResponse(
+            {
+                "action": "sweep",
+                "notify": bool(messages),
+                "count": len(messages),
+                "messages": messages,
+                "pruned": pruned,
+            }
+        )
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 DEFAULT_DB_PATH = "./correlation_state.db"
+BUSY_TIMEOUT_MS = 5000
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS checkpoint (
@@ -50,14 +51,18 @@ CREATE TABLE IF NOT EXISTS incidents (
     finalized_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS pending_exec_alerts (
+CREATE TABLE IF NOT EXISTS pending_cross_decoder_alerts (
     alert_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
     host_name TEXT NOT NULL,
     task_key TEXT,
     timestamp TEXT NOT NULL,
+    stored_at TEXT NOT NULL,
     rule_id TEXT,
     payload TEXT NOT NULL
 );
+
+DROP TABLE IF EXISTS pending_exec_alerts;
 """
 
 
@@ -65,6 +70,7 @@ def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     return conn
 
 
@@ -204,70 +210,124 @@ def close_incident(conn: sqlite3.Connection, incident_id: str):
     conn.commit()
 
 
-def record_pending_exec(
+def pair_or_store_cross_decoder(
     conn: sqlite3.Connection,
     alert_id: str,
+    kind: str,
+    counterpart_kind: str,
     host_name: str,
     task_key: str | None,
     timestamp: str,
     rule_id: str,
     payload: dict,
-):
-    """Simpen alert eksekusi (Sysmon event 1) yang nunggu dipasangin alert korelasi
-    dari decoder lain. Timestamp WAJIB sudah dinormalisasi ke UTC ISO sama pemanggil,
-    karena pencarian pasangannya ngitung selisih detik antar dua alert."""
-    conn.execute(
-        "INSERT INTO pending_exec_alerts (alert_id, host_name, task_key, timestamp, rule_id, payload) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(alert_id) DO UPDATE SET "
-        "host_name = excluded.host_name, task_key = excluded.task_key, "
-        "timestamp = excluded.timestamp, rule_id = excluded.rule_id, payload = excluded.payload",
-        (alert_id, host_name, task_key, timestamp, rule_id, json.dumps(payload)),
-    )
-    conn.commit()
+    window_seconds: int,
+) -> tuple[sqlite3.Row | None, str | None]:
+    """Cari pasangan lintas decoder; kalau belum ada, simpen alert ini buat nunggu.
 
+    Dua alert yang dipasangin (Sysmon event 1 dan Security 4698) lahir dari event yang
+    beda dan nyampe lewat eksekusi n8n yang beda, jadi urutan datengnya gak bisa
+    diandelin -- terukur cuma 4 ms terpaut. Yang nentuin siapa nyimpen dan siapa narik
+    itu siapa yang nyampe BELAKANGAN, bukan rule ID-nya.
 
-def find_pending_exec_by_task(
-    conn: sqlite3.Connection, host_name: str, task_key: str, alert_ts: str, window_seconds: int
-) -> sqlite3.Row | None:
-    rows = conn.execute(
-        "SELECT * FROM pending_exec_alerts WHERE host_name = ? AND task_key = ? ORDER BY timestamp DESC",
-        (host_name, task_key),
-    ).fetchall()
-    return _first_within_window(rows, alert_ts, window_seconds)
+    Seluruhnya jalan di dalam satu transaksi `BEGIN IMMEDIATE` karena cari-lalu-simpen
+    itu read-modify-write: tanpa lock, dua alert yang nyampe barengan sama-sama gak
+    nemu pasangan, sama-sama nyimpen, dan notifikasinya gak pernah kekirim sama sekali.
+    Timestamp WAJIB sudah dinormalisasi ke UTC ISO sama pemanggil.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row, match_type = None, None
+        if task_key:
+            row = _first_within_window(
+                conn.execute(
+                    "SELECT * FROM pending_cross_decoder_alerts "
+                    "WHERE kind = ? AND host_name = ? AND task_key = ? ORDER BY timestamp DESC",
+                    (counterpart_kind, host_name, task_key),
+                ).fetchall(),
+                timestamp,
+                window_seconds,
+            )
+            match_type = "task_name" if row else None
+        if row is None:
+            row = _first_within_window(
+                conn.execute(
+                    "SELECT * FROM pending_cross_decoder_alerts "
+                    "WHERE kind = ? AND host_name = ? ORDER BY timestamp DESC",
+                    (counterpart_kind, host_name),
+                ).fetchall(),
+                timestamp,
+                window_seconds,
+            )
+            match_type = "host_window" if row else None
 
-
-def find_latest_pending_exec(
-    conn: sqlite3.Connection, host_name: str, alert_ts: str, window_seconds: int
-) -> sqlite3.Row | None:
-    rows = conn.execute(
-        "SELECT * FROM pending_exec_alerts WHERE host_name = ? ORDER BY timestamp DESC",
-        (host_name,),
-    ).fetchall()
-    return _first_within_window(rows, alert_ts, window_seconds)
+        if row is not None:
+            conn.execute("DELETE FROM pending_cross_decoder_alerts WHERE alert_id = ?", (row["alert_id"],))
+        else:
+            conn.execute(
+                "INSERT INTO pending_cross_decoder_alerts "
+                "(alert_id, kind, host_name, task_key, timestamp, stored_at, rule_id, payload) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(alert_id) DO UPDATE SET "
+                "kind = excluded.kind, host_name = excluded.host_name, task_key = excluded.task_key, "
+                "timestamp = excluded.timestamp, stored_at = excluded.stored_at, "
+                "rule_id = excluded.rule_id, payload = excluded.payload",
+                (alert_id, kind, host_name, task_key, timestamp, _now_iso(), rule_id, json.dumps(payload)),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return row, match_type
 
 
 def _first_within_window(rows: list[sqlite3.Row], alert_ts: str, window_seconds: int) -> sqlite3.Row | None:
+    """Arah waktunya sengaja gak dikunci (`abs`): dua alert yang dipasangin nunjuk instant
+    yang sama -- terukur 4 ms terpaut, pernah 0 ms -- dan sisi mana yang timestamp-nya lebih
+    tua bisa kebalik karena jitter urutan proses di analysisd. Yang nentuin pasangan itu
+    kedekatan waktu, bukan urutannya."""
     for row in rows:
         gap = (datetime.fromisoformat(alert_ts) - datetime.fromisoformat(row["timestamp"])).total_seconds()
-        if 0 <= gap <= window_seconds:
+        if abs(gap) <= window_seconds:
             return row
     return None
 
 
-def delete_pending_exec(conn: sqlite3.Connection, alert_id: str):
-    conn.execute("DELETE FROM pending_exec_alerts WHERE alert_id = ?", (alert_id,))
-    conn.commit()
+def take_expired_pending(conn: sqlite3.Connection, kind: str, older_than_seconds: int) -> list[sqlite3.Row]:
+    """Ambil sekaligus hapus alert `kind` yang nunggu pasangan lebih lama dari jendela
+    korelasi. Umurnya diukur dari `stored_at` (kapan row masuk), bukan `timestamp` alert:
+    agent yang abis reconnect nge-flush log lama sekaligus, jadi alert bisa nyampe dengan
+    timestamp jam-jam sebelumnya dan bakal langsung dianggap kedaluwarsa sebelum
+    pasangannya sempat dateng. Baca-lalu-hapus dikunci `BEGIN IMMEDIATE` biar dua pemanggil sweep yang
+    kebetulan barengan gak ngeluarin alert yang sama dua kali."""
+    now = datetime.now(timezone.utc)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        expired = [
+            row
+            for row in conn.execute(
+                "SELECT * FROM pending_cross_decoder_alerts WHERE kind = ? ORDER BY timestamp ASC", (kind,)
+            ).fetchall()
+            if (now - datetime.fromisoformat(row["stored_at"])).total_seconds() > older_than_seconds
+        ]
+        for row in expired:
+            conn.execute("DELETE FROM pending_cross_decoder_alerts WHERE alert_id = ?", (row["alert_id"],))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return expired
 
 
-def prune_pending_exec(conn: sqlite3.Connection, retention_seconds: int) -> int:
-    """Buang alert eksekusi yang gak pernah kepasangin. Tanpa ini tabelnya numpuk dan
-    fallback pencocokan per-host bisa narik alert basi dari jam-jam sebelumnya."""
+def prune_pending_cross_decoder(conn: sqlite3.Connection, retention_seconds: int) -> int:
+    """Buang alert yang gak pernah kepasangin. Tanpa ini tabelnya numpuk dan fallback
+    pencocokan per-host bisa narik alert basi dari jam-jam sebelumnya. Sama kayak
+    `take_expired_pending`, umurnya dari `stored_at` -- `timestamp` alert dipakainya buat
+    nentuin pasangan, bukan buat nentuin kapan nyerah nunggu."""
     now = datetime.now(timezone.utc)
     deleted = 0
-    for row in conn.execute("SELECT alert_id, timestamp FROM pending_exec_alerts").fetchall():
-        if (now - datetime.fromisoformat(row["timestamp"])).total_seconds() > retention_seconds:
-            conn.execute("DELETE FROM pending_exec_alerts WHERE alert_id = ?", (row["alert_id"],))
+    for row in conn.execute("SELECT alert_id, stored_at FROM pending_cross_decoder_alerts").fetchall():
+        if (now - datetime.fromisoformat(row["stored_at"])).total_seconds() > retention_seconds:
+            conn.execute("DELETE FROM pending_cross_decoder_alerts WHERE alert_id = ?", (row["alert_id"],))
             deleted += 1
     if deleted:
         conn.commit()
