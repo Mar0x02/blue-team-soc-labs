@@ -230,7 +230,7 @@ Pengikatan yang beneran per-task (normalisasi `/tn` dari `commandLine` terus dic
 Jaraknya **1 milidetik**. Dua channel yang tadinya dikhawatirkan punya antrian sendiri ternyata nyampe Manager praktis barengan, jadi lebar `timeframe` gak jadi faktor di kondisi ini — 5 detik maupun 60 detik sama-sama lolos. Yang perlu diinget, ini hasil satu run di host yang lagi senggang; angka itu bukan jaminan buat agent yang lagi sibuk.
 ### F. Jalur notifikasi — dari rule ke Discord lewat API + n8n
 
-Rule `100604` cuma nyelesaiin separuh masalah. Dia bikin konfirmasi "task beneran terdaftar" jadi alert level 12 di Wazuh, tapi analis masih harus buka Dashboard buat liat. Di project ini udah ada layer orkestrasi n8n yang dibangun di lab [`soc-automation`](../../../../soc-automation/), dan lab ini nyambung ke situ lewat **dua jalur yang beda sifatnya**.
+Rule `100604` cuma nyelesaiin separuh masalah. Dia bikin konfirmasi "task beneran terdaftar" jadi alert level 12 di Wazuh, tapi analis masih harus buka Dashboard buat liat. Di project ini udah ada layer orkestrasi n8n yang dibangun di lab [`soc-automation`](../../../../soc-automation/), dan lab ini nyambung ke situ lewat **tiga jalur yang beda sifatnya**.
 
 #### Jalur 1 — push per-alert (Fase 1)
 
@@ -318,19 +318,195 @@ Hasil akhirnya tiga tingkat, tiap tingkat punya pertanyaan sendiri:
 
 n8n Schedule Trigger manggil `POST /correlate/tick` tiap N menit, service-nya nge-cluster alert jadi incident, bikin narasi AI + RAG, terus ngirim satu notifikasi Discord per incident (bukan per alert) plus ticket Jira yang di-link ke ticket Fase 1 anggotanya. Setup-nya di [`Infrastructure/n8n-correlation-workflow-setup.md`](../../../../../Infrastructure/n8n-correlation-workflow-setup.md).
 
-Jalur ini yang cocok buat batasan yang kesisa dari `100604`. Pengikatan per-task yang gak bisa dikerjain `same_field` — ekstrak nama task dari `/tn` di `commandLine` event 1, strip backslash depan dari `taskName` 4698, baru dicocokin — di layer ini bebas ditulis sebagai logic normalisasi biasa. Jadi pembagian kerjanya: **Wazuh ngangkat sinyal & ngiket kasar pakai timeframe, layer korelasi yang ngiket presisi per-task.**
+Jalur ini yang awalnya direncanain buat nutup batasan yang kesisa dari `100604`. Pengikatan per-task yang gak bisa dikerjain `same_field` — ekstrak nama task dari `/tn` di `commandLine` event 1, strip backslash depan dari `taskName` 4698, baru dicocokin — di layer API bebas ditulis sebagai logic normalisasi biasa. Jadi pembagian kerjanya: **Wazuh ngangkat sinyal & ngiket kasar pakai timeframe, layer API yang ngiket presisi per-task.**
+
+Yang gak kepikiran waktu itu: jalur 2 jalan per tick, jadi notifikasinya nunggu jadwal berikutnya. Buat konfirmasi persistence yang udah level 12, itu kelamaan. Pengikatan per-task akhirnya ditaruh di jalur ketiga yang sifatnya push.
 
 Bedanya buat analis juga nyata. Jalur 1 ngasih notifikasi mentah ("ada alert level 12 di WIN7-VICTIM"), jalur 2 ngasih satu notifikasi yang udah nyeritain rangkaiannya. Buat teknik persistence kayak T1053.005 yang jarang berdiri sendiri — biasanya nyambung ke execution sebelumnya (lab [T1059.001](<../../Execution/Command and Scripting Interpreter (T1059.001 - PowerShell)/README.md>)) — jalur 2 yang lebih ngasih konteks.
 
-#### Status: belum jalan
+#### Jalur 3 — push per-alert dengan pengikatan per-task
 
-Yang perlu disadari:
+Route `POST /notify/cross-decoder` di [`AI-Rag-Integration/api-service.py`](../../../../../AI-Rag-Integration/api-service.py), dipanggil node n8n dari cabang webhook yang sama kayak Jalur 1 — jadi gak nambah jalur push dari Manager, cuma nambah cabang di n8n.
 
-- Wazuh Integrator di Dell (step 6 di doc Fase 1) **belum dieksekusi**, jadi alert dari lab ini — termasuk `100605` dan `100604` — belum pernah ngalir ke n8n sama sekali. Yang udah diverifikasi di lab `soc-automation` itu test payload manual lewat `curl`, bukan alert asli Win7.
-- Node IF buat ngecek group `notify_discord` **belum dibikin** di workflow Fase 1. Selama belum ada, semua alert level ≥7 masih ikut ke Discord.
+Masalah yang dia selesaikan: alert `100604` dipicu event 4698, jadi dia **gak bawa field Sysmon sama sekali**. Command line yang isinya payload task — bagian paling berguna buat analis — cuma ada di alert `100605`, yang datang sebagai alert terpisah. Route ini yang nyatuin: alert yang nyampe duluan disimpen di SQLite, yang nyampe belakangan narik pasangannya lewat kunci nama task yang udah dinormalisasi (`\WindowsUpdateCheck` → `windowsupdatecheck`), terus ngerakit satu pesan Discord.
+
+Hasil live, run 24 September 2026 04:49:41 UTC:
+
+```
+🚨 Scheduled task creation confirmed: schtasks.exe spawned a PowerShell task
+   (Sysmon 1) followed by Security 4698 task registration
+Host: WIN7-VICTIM | Rule: 100604 (level 12)
+Task: WindowsUpdateCheck
+Waktu: 2026-09-24T04:49:41.210+0000
+
+Dari alert eksekusi 100605 (2026-09-24T04:49:41.206+0000):
+Parent: C:\Windows\System32\cmd.exe
+User: LAB\Administrator
+Command: schtasks /create /tn "WindowsUpdateCheck" /tr "powershell.exe -NoProfile
+         -WindowStyle Hidden -Command \"Write-Host 'Persistence task executed -
+         Lab Test'\"" /sc onlogon /ru SYSTEM /f
+```
+
+Empat baris terakhir itu yang gak mungkin ada kalau notifikasinya cuma ngandelin alert `100604`. Analis L1 dapet jawaban "task apa, jalanin apa, dibikin siapa" tanpa buka Dashboard.
+
+Bukti di channel Discord `#correlation-lab-spesifc`. Ada dua run yang sama-sama berhasil dipasangin: `04:49:41` UTC (yang di atas) dan `08:07:47` UTC. Di dua-duanya, alert korelasi `100604` bawa command line dari alert eksekusi `100605`, dan selisih timestamp kedua alert cuma 1–4 milidetik.
+
+![Notifikasi Discord hasil pairing 100604 + 100605 lewat route /notify/cross-decoder](<./assets/discord notif alert correlation log.png>)
+
+#### Gate yang gak keliatan: level rule di repo vs di Dell
+
+Percobaan pertama jalur 3 keliatan jalan — notifikasi Discord masuk — tapi isinya selalu:
+
+> ⚠️ Alert eksekusi pasangannya gak ketemu dalam 300 detik terakhir.
+
+Dan di history n8n, **gak ada eksekusi sama sekali buat event ID 1**. Query langsung ke Indexer Dell (`wazuh-alerts-*`) yang ngejawab:
+
+| Waktu (UTC) | Rule | Level | Event |
+|-------------|------|-------|-------|
+| 04:29:11.275 | `100605` | **6** | Sysmon 1 |
+| 04:29:11.289 | `100604` | 12 | 4698 |
+
+File rule di repo udah `level="10"`, tapi ruleset yang jalan di Dell masih versi sebelum level itu dinaikin. Integrator disaring `<level>7</level>`, jadi `6 < 7` bikin alert eksekusi **gak pernah di-forward ke n8n** — tabel pending gak pernah keisi, dan pasangannya mustahil ketemu.
+
+Yang perlu dicatat: **deteksinya sendiri gak rusak sedikit pun.** `100604` tetap fire normal, karena `if_matched_sid` gak peduli level rule anaknya. Yang mati cuma jalur notifikasi, dan matinya sebagian — notif tetap dikirim, cuma konteksnya kosong. Ini bentuk konkret dari apa yang udah ditulis di awal section ini: **level rule itu gate ke pipeline, bukan cuma warna di Dashboard.** Bedanya, di sini gate-nya nutup gara-gara file rule di repo dan di Dell beda versi — kelas masalah yang gak bakal ketangkep `wazuh-logtest`, karena logic rule-nya emang bener.
+
+Pelajaran operasionalnya: kalau notifikasi keliatan aneh tapi rule-nya "udah bener di repo", yang pertama dicek bukan logic rule-nya, tapi **apakah yang jalan di Manager emang versi itu** — lewat level yang kebawa di alert, bukan lewat isi file.
+
+#### Race condition: dua alert, dua eksekusi n8n, 4 milidetik
+
+Setelah ruleset disinkronin dan pairing-nya berhasil, ketahuan desain route-nya masih rapuh. Versi pertama nentuin peran dari rule ID: `100605` **selalu** nyimpen, `100604` **selalu** narik. Itu asumsi bahwa alert eksekusi selalu nyampe duluan.
+
+Asumsi itu gak dijamin. Dua alert ini lahir dari event yang beda, di-forward Integrator sebagai dua panggilan webhook terpisah, dan diproses n8n sebagai **dua eksekusi paralel** yang masing-masing ketahan panggilan Ollama puluhan detik di cabang AI triage. Jaraknya sendiri cuma **4 milidetik** (run 04:49:41), dan pernah **1 milidetik** (run 22 September). Pada jarak segitu, urutan datengnya ditentukan antrian Ollama dan latency Jira — bukan urutan kejadian di Win7.
+
+Kalau urutannya kebalik, yang ada cuma retry 3× dengan jeda 0,5 detik: **1 detik grace**, lawan cabang yang bisa ketahan puluhan detik. Lewat itu, notifikasinya kirim "pasangannya gak ketemu" padahal pasangannya lagi di jalan.
+
+Ada efek samping yang lebih jahat dari sekadar notif tanpa konteks. Row `100605` yang datang telat tetap disimpen, gak ada yang konsumsi, dan nongkrong 30 menit. Run lab berikutnya dalam jendela 300 detik bisa **nyomot row basi dari run sebelumnya** — notifikasinya keliatan sukses, command line-nya dari run yang salah.
+
+Perbaikannya: **peran gak ditentukan dari rule ID, tapi dari siapa yang nyampe belakangan.** Sisi mana pun yang duluan bakal nyimpen dan diem; yang belakangan yang masangin dan ngirim notifikasi. Urutan jadi gak relevan.
+
+Tiga hal yang muncul justru dari perbaikan itu, dan ketiganya baru ketahuan pas ditulisin tes:
+
+- **Kalau dua-duanya nyampe benar-benar barengan, notifikasinya bisa ilang total.** Cari-lalu-simpen itu *read-modify-write*. Tanpa lock, dua alert sama-sama gak nemu pasangan, sama-sama nyimpen, dan gak ada yang ngirim apa-apa — gagal yang lebih berbahaya dari race aslinya, karena gak ninggalin jejak. Dibungkus `BEGIN IMMEDIATE` + `PRAGMA busy_timeout`.
+- **Pesan "pasangannya gak ketemu" jadi gak pernah muncul.** Dengan pengikatan simetris, alert korelasi yang pasangannya gak pernah datang cuma diem di tabel — padahal justru pesan itu yang bikin bug level-6 di atas ketahuan. Dikembalikan lewat endpoint terpisah `POST /notify/cross-decoder/sweep`, karena batas "nyerah nunggu" itu soal lewatnya waktu, bukan soal ada alert baru masuk.
+- **Umur row diukur dari timestamp alert, bukan dari kapan row-nya disimpen.** Alert yang datang dengan timestamp lebih tua dari retention kehapus di request yang sama pas dia baru masuk. Di lab dua angka itu selisihnya milidetik jadi gak pernah keliatan, tapi agent Wazuh yang abis reconnect nge-flush antrian log-nya sekaligus dengan timestamp jam-jam sebelumnya. Dipisah jadi dua kolom: **`timestamp` alert buat nentuin pasangan, wall clock buat nentuin kapan nyerah nunggu.**
+
+Pola yang keulang di tiga-tiganya: perbaikan race gak selesai pas urutannya diberesin. Yang kegeser justru *bentuk* gagalnya — dari "notif kurang konteks" (keliatan) jadi "gak ada notif sama sekali" (sunyi). Buat pipeline deteksi, gagal yang sunyi itu yang lebih mahal.
+
+#### Status
+
+| Komponen | Status |
+|----------|--------|
+| Wazuh Integrator (`custom-n8n`) di Dell | ✅ Jalan — alert Win7 asli ngalir ke n8n |
+| Rule `100605` + `100604` fire di alert asli | ✅ Confirmed (section E) |
+| Sinkronisasi ruleset repo → Dell | ✅ Dibenerin 24 Sep 2026, `100605` sekarang level 10 |
+| Jalur 3 — pairing per-task + notif Discord | ✅ Live, dengan command line lengkap |
+| Pengikatan simetris (fix race condition) | ⚠️ Lolos 9 skenario tes sintetis, **belum diuji pakai run schtasks asli** |
+| Endpoint `/notify/cross-decoder/sweep` | ⚠️ Udah ada, **belum di-wire** ke Schedule Trigger n8n |
+| Node IF filter group `notify_discord` | ❌ Belum dibikin — semua alert level ≥7 masih ikut ke Discord |
+
+Yang masih kebuka dan belum kejawab:
+
+- Run 04:45:49 nunjukin `100605` dan `60228` (4698 polos, level 4) fire di timestamp yang sama persis, tapi **`100604` gak fire sama sekali**. Dugaannya 4698 diproses analysisd sebelum `100605` selesai match, jadi `if_matched_sid` belum keisi. Ini batasan "urutan kebalik" yang udah ditulis di section E — sekarang ada buktinya. Gagalnya sunyi: level 4, di bawah threshold Integrator, jadi gak ada notif apa pun. Ini di layer analysisd, di luar jangkauan route API.
 - Pencocokan group di Wazuh belum dites apakah exact-match per-elemen atau substring. Kalau substring, nama group yang jadi prefix nama lain (misal nanti ada `notify_discord_low`) bakal ikut ke-match. Sementara ini nama `notify_discord` dijaga gak jadi prefix group lain.
-- Tag operasional ini bakal nongol di `rule.groups` alert, campur sama group deteksi kayak `scheduled_task`. Efek sampingnya positif (bisa difilter di Dashboard), tapi sadar aja bahwa keputusan routing sekarang kelihatan di data alert.
-- Rule `100604` sendiri udah confirmed fire (lihat section E), tapi jalur notifikasinya belum pernah dites end-to-end karena dua poin pertama di atas.
+- Tag operasional nongol di `rule.groups` alert, campur sama group deteksi kayak `scheduled_task`. Efek sampingnya positif (bisa difilter di Dashboard), tapi sadar aja bahwa keputusan routing sekarang kelihatan di data alert.
+
+### G. Custom rule 100606 — task beneran jalan (fase eksekusi payload)
+
+Section C sampai F semuanya soal **pembuatan** task. `100605` nangkep `schtasks.exe` dipanggil, `100604` ngonfirmasi task-nya kedaftar. Tapi dua-duanya gak ngejawab pertanyaan berikutnya: **payload-nya beneran jalan atau nggak?** Task `/sc onlogon` bisa aja nongkrong berhari-hari sebelum ada yang logon, dan saat itu `schtasks.exe` udah lama selesai.
+
+Pas task jalan, Task Scheduler di Win7 nge-spawn **`taskeng.exe`**, dan `taskeng.exe` yang nge-spawn action task-nya. Jadi yang dicari adalah Sysmon event 1 dengan `image` `powershell.exe` dan `parentImage` `taskeng.exe`.
+
+```xml
+<rule id="100606" level="12">
+    <if_sid>61603</if_sid>
+    <field name="win.system.eventID" type="pcre2">1</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\powershell\.exe$</field>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)-NoProfile|-nop</field>
+    <field name="win.eventdata.parentImage" type="pcre2">(?i)(?:taskeng|svchost)\.exe$</field>
+    <description>Sysmon: PowerShell execution triggered by Scheduled Task Engine (persistence re-execution)</description>
+    <mitre>
+        <id>T1053.005</id>
+        <id>T1059.001</id>
+    </mitre>
+    <group>persistence,scheduled_task,</group>
+</rule>
+```
+
+| Field | Fungsi |
+|-------|--------|
+| `image` `\\powershell\.exe$` | Proses yang jalan adalah PowerShell |
+| `commandLine` `-NoProfile\|-nop` | Flag yang dipakai payload task di Step 4, termasuk bentuk singkatannya (lihat backlog bypass flag di lab T1059) |
+| `parentImage` `(taskeng\|svchost)\.exe$` | `taskeng.exe` itu host eksekusi task di Win7. `svchost.exe` buat nutup Windows versi baru, yang jalanin task lewat service `Schedule` |
+| `mitre` T1053.005 + T1059.001 | Satu kejadian nyentuh dua teknik: task-nya (persistence) dan PowerShell yang dijalanin (execution) |
+| `group` `persistence,scheduled_task` | Satu keluarga sama `100604`/`100605`, jadi tiga fase task bisa difilter bareng di Dashboard |
+
+Buat mancing eksekusinya tanpa harus logout, task-nya dipicu manual:
+
+```cmd
+schtasks /run /tn "WindowsUpdateCheck"
+```
+
+#### Debugging: rule yang gak mau fire
+
+Rule ini dibikin 24 September 2026, dan **seharian gak fire sekali pun**. Padahal event pemicunya jelas nyampe Manager: kelihatan di `wazuh-archives-*` dengan `rule: None`, decoder `windows_eventchannel`, parent `taskeng.exe`, user `NT AUTHORITY\SYSTEM`.
+
+Rule-nya dipreteli sampai paling telanjang, cuma `if_sid 61603` + satu field `parentImage (?i)taskeng`. Tetap gak fire. Varian yang gantung ke `<if_group>sysmon_event1</if_group>` (jalur yang dipakai rule bawaan) juga gak fire. Hipotesis yang diuji satu-satu, dan semuanya gugur:
+
+| # | Hipotesis | Cara ngujinya | Hasil |
+|---|-----------|---------------|-------|
+| 1 | Rule belum ke-deploy ke Dell | `grep` di `etc/rules/` | Ada, cuma satu definisi |
+| 2 | ID `100606` dobel (ID ini sempat dipakai rule routing yang udah dihapus, lihat section F) | `grep -rn 'id="100606"'` ke `ruleset/rules/` + `etc/rules/` | Cuma satu |
+| 3 | Manager belum restart setelah edit | Bandingin **`ctime`** file dengan waktu restart dan waktu event | Urutannya bener: edit → restart → event |
+| 4 | Ruleset gagal di-parse | `wazuh-analysisd -t` + `ossec.log` | Exit 0, gak ada error |
+| 5 | `sysmon_rules.xml` gak ke-load | Rule lain di file yang sama (`100601`) | `100601` fire normal |
+| 6 | Rule bawaan level 0 nyerobot (kayak `92101` di lab T1059) | Cek 4 rule level 0 di `0800-sysmon_id_1.xml` | Gak ada yang match event ini |
+| 7 | Parent/user/session yang bikin beda | Jalanin payload yang sama dari `cmd.exe` sebagai Administrator | Tetap gak fire |
+| 8 | Pipeline alert WIN7 mati | Alert lain dari WIN7 (`60608`) | Ngalir normal |
+| 9 | Decoder beda | Bandingin event yang jalan dan yang nggak | Dua-duanya `windows_eventchannel` / `EventChannel` |
+
+Di sepanjang proses itu ketemu tiga jebakan alat, yang masing-masing sempat bikin kesimpulan salah:
+
+- **`mtime` nipu.** `mv`, `scp -p`, dan `cp -p` bawa `mtime` dari file sumber, jadi file yang baru nyampe bisa keliatan lebih tua dari waktu restart. Buat mutusin "restart udah sesudah edit apa belum", yang dipakai **`ctime`** (`stat -c %z`).
+- **`wazuh-logtest` gak bisa dipakai buat rule Sysmon/eventchannel.** Input dari stdin selalu kepilih decoder `json` generik, sementara pohon rule Sysmon gantung di `61600` yang mensyaratkan `<decoded_as>windows_eventchannel</decoded_as>`. Phase 3 gak pernah muncul, dan `-l "EventChannel"` gak ngubah apa-apa. Artinya **semua rule Win7 di project ini cuma bisa divalidasi lewat event asli dari agent**.
+- **`wazuh-analysisd -t` cuma nge-parse file di disk.** Exit 0 artinya file-nya valid, bukan bukti bahwa isi memori analysisd yang lagi jalan sama dengan file itu.
+
+Langkah terakhir yang disiapin, `analysisd.debug=2` buat ngeliat rule mana yang dicoba analysisd dan berhenti di mana, gak sempat dijalanin.
+
+#### Hasil — pagi berikutnya, dia fire
+
+25 September pagi, rule di Dell dibalikin ke versi lengkap di atas (versi repo, bukan versi telanjang buat debugging), dan skenarionya dijalanin ulang. **`100606` fire**, dua kali:
+
+| Time (Dashboard) | Rule | Event | `image` | `parentImage` |
+|------------------|------|-------|---------|---------------|
+| 2026-09-25 10:34:59.095 | `100606` | 1 | `...\WindowsPowerShell\v1.0\powershell.exe` | `C:\Windows\System32\taskeng.exe` |
+| 2026-09-25 10:47:22.959 | `100606` | 1 | `...\WindowsPowerShell\v1.0\powershell.exe` | `C:\Windows\System32\taskeng.exe` |
+
+![Alert 100606 di wazuh-alerts-*, parent taskeng.exe](<./assets/alert 100606 taskeng.png>)
+
+Di `wazuh-archives-*`, run `10:47:22` kelihatan rantai lengkapnya, semua dalam ~60 milidetik (event 9 yang nyelip di antaranya gak ditulis di tabel):
+
+| Time | Event | Proses | Catatan |
+|------|-------|--------|---------|
+| 10:47:22.914 | 9 | `schtasks.exe` | Nongol 1 ms sebelum `taskeng.exe`, konsisten sama `schtasks /run` |
+| 10:47:22.915 | 1 | `taskeng.exe` | Command line `taskeng.exe {CF6E4F5E-...} S-1-5-18:NT AUTHORITY\System:Service:` |
+| 10:47:22.959 | 1 | `powershell.exe` | `powershell.exe -NoProfile -WindowStyle Hidden -Command \"Write-Host \"Persistence task executed - Lab Test\"\"` → jadi `100606` |
+| 10:47:22.974 | 1 | `conhost.exe` | Console host buat PowerShell |
+
+![Rantai eksekusi task di wazuh-archives-*: schtasks → taskeng → powershell → conhost](<./assets/archives task execution chain.png>)
+
+> **Catatan evidence:** dua alert di atas fire waktu description rule masih `Sysmon: Command line execution of powershell.exe with -NoProfile flags detected` dengan group `command_injection,command_scripting`. Setelah itu yang diubah cuma description, group, dan MITRE ID, logic match-nya tetap sama.
+
+**Root cause kenapa kemarin gak fire: gak ketemu.** Beda yang kelihatan cuma dua: versi rule (telanjang vs lengkap) dan waktunya (sore kemarin vs pagi ini). Hipotesis 1–9 di atas udah nyingkirin penyebab yang biasanya, jadi hasil ini dicatat apa adanya: **rule yang sama sekarang fire di event asli, dan itu yang jadi bukti deteksinya.**
+
+Pelajaran yang tetap kepake walau root cause-nya gak ketemu: buat rule Win7, satu-satunya bukti yang bisa dipegang adalah **alert di `wazuh-alerts-*` dari event asli**. `logtest` gak bisa, `analysisd -t` cuma ngecek sintaks, dan timestamp file bisa nipu.
+
+#### Batasan
+
+- **Nama task gak kebawa.** Command line `taskeng.exe` cuma berisi GUID dan SID, gak ada nama task. Jadi `100606` gak bisa langsung dipasangin ke alert pembuatan (`100604`/`100605`) lewat nama task kayak di jalur 3. Yang bisa dipakai ikatan cuma host + waktu.
+- **Bergantung ke flag `-NoProfile`.** Payload task yang jalanin PowerShell tanpa flag itu (atau yang jalanin `cmd.exe`, `wscript.exe`, binary lain) gak ketangkep.
+- **`svchost.exe` di `parentImage` itu lebar.** Di Win7 cabang itu gak kepake (task jalan lewat `taskeng.exe`), tapi `svchost.exe` induk dari banyak service, jadi di host yang lebih baru rule ini bisa match PowerShell yang bukan dari task.
+- Level 12 berarti alert ini lolos threshold Integrator (≥7) dan ikut ke n8n. Tapi dia **gak punya** group `notify_discord` dan gak diproses route `/notify/cross-decoder`, jadi belum ada notif Discord khusus buat fase eksekusi.
+
 ---
 
 ## Kesimpulan
@@ -342,7 +518,11 @@ Pembuatan scheduled task sebagai mekanisme persistence di Win7 **bisa dideteksi 
 
 Dua sumber itu dipasangin lewat rule korelasi `100604`: 4698 naik ke level 12 kalau sebelumnya ada event 1 `schtasks.exe` yang mencurigakan. Bedanya dengan korelasi `100602` di lab T1059.001, di sini dua event-nya gak bisa diikat pakai `same_field` — Sysmon mandang kejadian ini sebagai *proses*, Security 4698 mandangnya sebagai *object task*, jadi gak ada field yang nama sekaligus nilainya sama. Ikatannya cuma timeframe — dan itu cukup buat lab ini: run 22 September 2026 nunjukin `100605` dan `100604` fire beruntun dalam jarak 1 milidetik.
 
-Level `100604` juga nentuin apakah temuan ini nyampe ke analis di luar Dashboard: Wazuh Integrator ke n8n disaring level ≥7, jadi `60228` level 4 ketahan sementara `100604` level 12 lolos masuk pipeline. Dari situ, yang nentuin dia dinotif ke Discord atau cuma jadi ticket Jira adalah group `notify_discord` di rule-nya. Sempat dicoba misahin keputusan itu jadi rule sendiri, tapi gagal karena Wazuh cuma ngasih satu alert per event — rule anak nggantiin induknya, bukan nambahin. Jalur notifikasi itu sendiri belum jalan buat lab ini — Integrator di Dell belum dieksekusi.
+Level `100604` juga nentuin apakah temuan ini nyampe ke analis di luar Dashboard: Wazuh Integrator ke n8n disaring level ≥7, jadi `60228` level 4 ketahan sementara `100604` level 12 lolos masuk pipeline. Dari situ, yang nentuin dia dinotif ke Discord atau cuma jadi ticket Jira adalah group `notify_discord` di rule-nya. Sempat dicoba misahin keputusan itu jadi rule sendiri, tapi gagal karena Wazuh cuma ngasih satu alert per event — rule anak nggantiin induknya, bukan nambahin.
+
+Jalur notifikasi itu sekarang **udah jalan end-to-end**: alert Win7 asli nyampe Discord lengkap dengan command line task-nya, lewat route pairing per-task di layer API. Dua hal yang ngeganjal di situ dua-duanya soal waktu, bukan soal logic deteksi. Pertama, ruleset di Dell ketinggalan dari repo, dan level `100605` yang masih 6 bikin alert eksekusi ketahan threshold Integrator — deteksinya tetap jalan sempurna, yang mati cuma konteks notifikasinya. Kedua, dua alert yang mau dipasangin nyampe cuma 4 milidetik terpaut lewat dua eksekusi n8n paralel, jadi urutan datengnya gak bisa diasumsikan; route-nya ditulis ulang supaya sisi mana pun yang nyampe belakangan yang masangin. Dari situ pelajaran yang paling kepake: tiap kali race-nya diberesin, yang kegeser itu *bentuk* gagalnya — dan bentuk yang paling mahal buat pipeline deteksi bukan notif yang kurang lengkap, tapi notif yang gak pernah dikirim sama sekali.
+
+Fase **eksekusi** task ditutup `100606`: PowerShell `-NoProfile` yang di-spawn `taskeng.exe`. Rule ini seharian gak fire dengan sembilan hipotesis yang gugur semua, lalu fire di event asli pagi berikutnya tanpa root cause yang ketemu. Yang kebawa dari situ bukan jawabannya, tapi cara buktiinnya: buat rule Win7, `wazuh-logtest` gak bisa dipakai dan `wazuh-analysisd -t` cuma ngecek sintaks, jadi satu-satunya bukti yang sah adalah alert di `wazuh-alerts-*` dari event asli.
 
 Pelajaran teknis terbesarnya ada di format nilai field eventchannel: tanda kutip disimpan sebagai `\"`, jadi regex yang ngarep kutip polos gagal diam-diam. Aturan praktisnya, jangan asumsikan karakter persis di sekitar nilai yang dikutip, dan tes regex terhadap nilai field hasil decode, bukan terhadap command yang diketik.
 
