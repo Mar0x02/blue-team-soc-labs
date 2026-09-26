@@ -69,4 +69,39 @@
         </mitre>
         <group>persistence,scheduled_task,</group>
     </rule>
+    <rule id="100607" level="3">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">^1$</field>
+        <field name="win.eventdata.image" type="pcre2">(?i)\\(systeminfo|hostname|net1?|whoami)\.exe$</field>
+        <description>Sysmon: Discovery command execution detected (systeminfo/hostname/net/whoami) by $(win.eventdata.user)</description>
+        <mitre>
+            <id>T1082</id>
+            <id>T1033</id>
+            <id>T1087.001</id>
+        </mitre>
+        <group>discovery,discovery_recon,</group>
+    </rule>
+    <rule id="100608" level="10" frequency="3" timeframe="30">
+        <if_matched_group>discovery_recon</if_matched_group>
+        <different_field>win.eventdata.commandLine</different_field>
+        <same_field>win.eventdata.user</same_field>
+        <description>Multiple discovery commands executed within short timeframe (possible recon burst activity)</description>
+        <mitre>
+            <id>T1082</id>
+            <id>T1033</id>
+            <id>T1087</id>
+        </mitre>
+        <group>discovery,recon_burst,</group>
+    </rule>
+    <rule id="100609" level="12">
+        <if_sid>100608</if_sid>
+        <time>11:00 - 23:59</time>
+        <description>Recon burst outside business hours by $(win.eventdata.user)</description>
+        <mitre>
+            <id>T1082</id>
+            <id>T1033</id>
+            <id>T1087</id>
+        </mitre>
+        <group>discovery,recon_burst,off_hours,</group>
+    </rule>
 </group>
