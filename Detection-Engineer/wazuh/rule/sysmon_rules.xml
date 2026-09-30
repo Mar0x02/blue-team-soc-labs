@@ -104,4 +104,16 @@
         </mitre>
         <group>discovery,recon_burst,off_hours,</group>
     </rule>
+    <rule id="100610" level="10">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">^1$</field>
+        <field name="win.eventdata.image" type="pcre2">(?i)\\powershell\.exe$</field>
+        <field name="win.eventdata.parentImage" type="pcre2">(?i)\\explorer\.exe$</field>
+        <description>Sysmon: PowerShell spawned directly by explorer.exe (possible user-initiated malicious file execution)</description>
+        <mitre>
+            <id>T1204.002</id>
+            <id>T1059.001</id>
+        </mitre>
+        <group>execution,user_execution,</group>
+    </rule>
 </group>
