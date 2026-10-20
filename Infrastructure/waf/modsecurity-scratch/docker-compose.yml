@@ -1,0 +1,13 @@
+services:
+  waf-scratch:
+    image: nginx:1.28.0
+    container_name: waf-scratch
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NGINX_ENVSUBST_OUTPUT_DIR=/etc/nginx
+    ports:
+      - "80:8080"
+    volumes:
+      - ./conf/nginx/${NGINX_CONF}:/etc/nginx/templates/nginx.conf.template:ro
+      - ./logs:/var/log/nginx
