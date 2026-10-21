@@ -1,0 +1,11 @@
+services:
+  waf-scratch:
+    build:
+      context: .
+      args:
+        NGINX_VERSION: "1.28.0"
+        MODSEC_VERSION: "v3.0.17"
+        CONNECTOR_VERSION: "v1.0.4"
+    image: waf-scratch:nginx-1.28.0-modsec-3.0.17
+    volumes:
+      - ./conf/nginx/modsec/main.conf:/etc/nginx/modsec/main.conf:ro

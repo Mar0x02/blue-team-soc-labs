@@ -38,7 +38,7 @@ Tiap tahap punya file sendiri dengan format Tujuan → Prerequisites → Step-by
 |-------|------|---------------|-----------------|--------|
 | 1 | [`01-nginx-reverse-proxy.md`](./01-nginx-reverse-proxy.md) | **Nginx polos** sebagai reverse proxy ke DVWA (tanpa WAF) | `proxy_pass`, header `X-Real-IP` / `X-Forwarded-For`, template envsubst | ✅ |
 | 2 | [`02-nginx-native-filter.md`](./02-nginx-native-filter.md) | **Rule native nginx** (tanpa ModSecurity) + log ke file | `map`, `if`/`return`, `location`, `limit_req`, `log_format`, dan **batasan** WAF berbasis regex mentah | ✅ |
-| 3–4 | `03-modsecurity-build.md` | **Compile libmodsecurity v3** + **connector** `ModSecurity-nginx` (`.so`, versi nginx harus sama persis) | Dependency engine (PCRE2, libxml2, yajl, curl, dll), `load_module` | ⏳ |
+| 3–4 | [`03-modsecurity-build.md`](./03-modsecurity-build.md) | **Compile libmodsecurity v3** + **connector** `ModSecurity-nginx` (`.so`, versi nginx harus sama persis) | Dependency engine (PCRE2, libxml2, yajl, curl, dll), `load_module` | 🚧 |
 | 5–6 | `04-modsecurity-basic-rules.md` | **Config engine** (`modsecurity.conf`, mulai `DetectionOnly`) + **SecRule tulisan sendiri** tanpa CRS | Phase, `SecRuleEngine`, audit log JSON, variable / operator / transformation / action | ⏳ |
 | 7 | `05-modsecurity-owasp-crs.md` | **Pasang OWASP CRS manual** _(opsional)_ | `crs-setup.conf`, urutan include, anomaly scoring, paranoia | ⏸️ Diputusin nanti |
 | 8 | `06-wazuh-integration.md` | **Log → Wazuh** | `<localfile>` + ingest ke agent `waf` | ⏳ |
@@ -60,11 +60,17 @@ modsecurity-scratch/
 ├── README.md                     ← file ini
 ├── 01-nginx-reverse-proxy.md
 ├── 02-nginx-native-filter.md
-├── docker-compose.yml
+├── 03-modsecurity-build.md
+├── Dockerfile                    ← mulai Tahap 3
+├── docker-compose.yml            ← base: nginx polos (Tahap 1–2)
+├── docker-compose.override.yml   ← mulai Tahap 3: build + modsec
 └── conf/
     └── nginx/
         ├── tahap-1-reverse-proxy.conf
-        └── tahap-2-native-filter.conf
+        ├── tahap-2-native-filter.conf
+        ├── tahap-3-modsecurity.conf
+        └── modsec/
+            └── main.conf         ← rule ModSecurity (Tahap 3+)
 ```
 
 Conf nginx dipisah **per tahap**, jadi tahap lama bisa dijalanin ulang kapan aja. Compose milih file lewat `NGINX_CONF` di `.env` VM (gitignored, bikin manual):
@@ -85,14 +91,16 @@ Conf dirender dari template (envsubst) **cuma waktu container dibuat**, jadi tia
 ```bash
 # dari Mac
 cd Infrastructure/waf/modsecurity-scratch
-scp -r docker-compose.yml conf anang@10.10.10.5:/data/waf/scratch/
+scp -r Dockerfile docker-compose.yml docker-compose.override.yml conf anang@10.10.10.5:/data/waf/scratch/
 
 # di VM
 cd /data/waf/scratch
-docker compose up -d --force-recreate
+docker compose up -d --force-recreate        # Tahap 3 (override auto-kebaca)
 docker exec waf-scratch nginx -t
 docker logs waf-scratch 2>&1 | tail -20      # pastiin gak ada [emerg]
 ```
+
+Mulai Tahap 3, `docker-compose.override.yml` **auto-kebaca** tiap `docker compose up` tanpa flag — defaultnya jalan Tahap 3 (build image ModSecurity + mount `main.conf`). Buat jalanin ulang Tahap 1–2 (nginx polos, tanpa build), skip override eksplisit: `docker compose -f docker-compose.yml up -d --force-recreate`.
 
 | Command | Ngerender ulang conf? |
 |---------|-------------------------------|
