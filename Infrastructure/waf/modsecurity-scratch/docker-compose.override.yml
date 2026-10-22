@@ -9,3 +9,4 @@ services:
     image: waf-scratch:nginx-1.28.0-modsec-3.0.17
     volumes:
       - ./conf/nginx/modsec/main.conf:/etc/nginx/modsec/main.conf:ro
+      - ./conf/nginx/modsec/rules:/etc/nginx/modsec/rules:ro

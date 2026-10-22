@@ -1,6 +1,6 @@
 # 🔧 Tahap 3 — Build ModSecurity (libmodsecurity + Connector)
 
-> 🚧 **Belum dijalanin.** Dockerfile, compose, dan conf di bawah masih rancangan. Hasil yang diharapkan di Verifikasi ditandai `🔬 VALIDATE`. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 3–4.
+> **Status:** Iterasi 1 (rule inline) ✅ **LIVE 2026-10-22** — engine kebukti nyala & nge-block. Iterasi 2 (file-based + kerangka anomaly scoring) 🚧 **config siap, belum di-deploy** (realisasi berikutnya); hasilnya ditandai `🔬 VALIDATE`. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 3–4.
 
 ## Tujuan
 
@@ -8,9 +8,12 @@ Rakit image nginx yang bisa jalanin ModSecurity, **dari source**, tanpa image si
 
 1. **Compile libmodsecurity v3** (engine-nya) dan lihat dependency apa aja yang dibutuhin
 2. **Compile connector** `ModSecurity-nginx` jadi dynamic module (`.so`), dari source nginx yang **versinya sama persis** dengan image
-3. **Load module** di nginx dan buktiin engine-nya hidup pakai **satu rule smoke test**
+3. **Load module** di nginx dan buktiin engine-nya hidup
 
-Belum ada rule beneran, belum ada `modsecurity.conf`. Itu urusan `04-modsecurity-basic-rules.md` (Tahap 5–6). Tahap ini cuma mastiin **mesinnya bisa nyala**.
+Dikerjain dalam **2 iterasi**:
+
+- **Iterasi 1 — rule inline:** satu rule smoke test ditempel langsung lewat `modsecurity_rules '...'`. Tujuannya cuma mastiin **mesinnya nyala**. ✅ *(udah live)*
+- **Iterasi 2 — file-based:** rule dipindah ke file sendiri (`modsecurity_rules_file` + `Include`), ditambah config engine, audit log JSON, dan kerangka anomaly scoring. Lebih terorganisir dan mendekati cara CRS kerja. 🚧 *(config siap, belum di-deploy)*
 
 | Komponen | Versi | Sumber |
 |----------|-------|--------|
@@ -44,7 +47,9 @@ Belum ada rule beneran, belum ada `modsecurity.conf`. Itu urusan `04-modsecurity
 │       ├── tahap-2-native-filter.conf
 │       ├── tahap-3-modsecurity.conf    ← baru
 │       └── modsec/
-│           └── main.conf               ← baru: directive + rule ModSecurity
+│           ├── main.conf               ← config engine + (Iterasi 2) loader rule
+│           └── rules/                   ← (Iterasi 2) file rule per-kategori
+│               └── rules-sqli.conf
 └── logs/
 ```
 
@@ -101,7 +106,7 @@ COPY --from=builder /src/ModSecurity/modsecurity.conf-recommended /etc/nginx/mod
 | Bagian | Fungsi |
 |--------|--------|
 | `FROM nginx:${NGINX_VERSION} AS builder` | Stage builder pakai **image yang sama** dengan stage final, jadi OS, compiler, dan library-nya cocok |
-| `libpcre2-dev`, `libxml2-dev`, `libyajl-dev`, `libcurl4-openssl-dev`, `liblmdb-dev` | Dependency libmodsecurity: regex (`@rx`), parsing body XML, parsing body JSON, `SecRemoteRules`, dan penyimpanan collection persisten |
+| `libpcre2-dev`, `libxml2-dev`, `libyajl-dev`, `libcurl4-openssl-dev`, `liblmdb-dev` | Dependency libmodsecurity: regex (`@rx`), parsing body XML, parsing body JSON (+ audit log JSON), `SecRemoteRules`, dan penyimpanan collection persisten |
 | `--recursive` | ModSecurity punya **submodule** (`libinjection` buat `@detectSQLi`/`@detectXSS`, `mbedtls`). Tanpa ini build gagal |
 | `./build.sh` → `./configure` → `make install` | Pola autotools. Hasilnya di `/usr/local/modsecurity/` (`lib/libmodsecurity.so.3`, header di `include/`) |
 | `--disable-doxygen-doc --disable-examples` | Lewatin bikin dokumentasi dan contoh, biar build lebih cepat |
@@ -109,7 +114,7 @@ COPY --from=builder /src/ModSecurity/modsecurity.conf-recommended /etc/nginx/mod
 | `--add-dynamic-module` + `make modules` | Cuma compile module-nya, gak compile ulang nginx |
 | Stage final | Cuma runtime library (tanpa `-dev`, tanpa compiler) + `libmodsecurity` + `.so`. Image jauh lebih kecil dari stage builder |
 | `/usr/local/modsecurity/lib/` path sama | Connector di-link pakai **rpath** ke path ini. Kalau path di stage final beda, module gagal load (`libmodsecurity.so.3: cannot open shared object file`) |
-| `unicode.mapping`, `modsecurity.conf-recommended` | Belum dipakai di tahap ini, disiapin buat Tahap 5 (`SecUnicodeMapFile`, config engine) |
+| `unicode.mapping`, `modsecurity.conf-recommended` | Belum dipakai penuh di tahap ini, disiapin buat Tahap 5 (`SecUnicodeMapFile`, config engine lengkap) |
 
 ### 2. `docker-compose.yml` + `docker-compose.override.yml`
 
@@ -147,15 +152,17 @@ services:
     image: waf-scratch:nginx-1.28.0-modsec-3.0.17
     volumes:
       - ./conf/nginx/modsec/main.conf:/etc/nginx/modsec/main.conf:ro
+      - ./conf/nginx/modsec/rules:/etc/nginx/modsec/rules:ro
 ```
 
-Override cuma nulis yang **beda** dari base — `container_name`, `ports`, `env_file`, `environment`, dan volume template + logs diwarisin dari base pas di-merge, jadi gak perlu diulang. Volume di-merge **by target path**, jadi mount `main.conf` ini **nambah** ke dua volume base, bukan ganti.
+Override cuma nulis yang **beda** dari base — `container_name`, `ports`, `env_file`, `environment`, dan volume template + logs diwarisin dari base pas di-merge, jadi gak perlu diulang. Volume di-merge **by target path**, jadi dua mount ini **nambah** ke volume base, bukan ganti.
 
 | Baris override | Fungsi |
 |----------------|--------|
 | `build:` + `args` | Image dirakit dari `Dockerfile` di folder ini; versi dikunci di sini (`NGINX_VERSION` harus sama dengan source nginx yang di-compile) |
 | `image: waf-scratch:...` | Nimpa `image: nginx:1.28.0` dari base, sekaligus jadi tag hasil build (keliatan di `docker images`) |
-| mount `main.conf` | File rule ModSecurity, dibaca lewat `include` di conf nginx (Step 3) |
+| mount `main.conf` | Config ModSecurity, dibaca conf nginx (Step 3) |
+| mount `rules/` | **(ditambah di Iterasi 2)** folder file rule yang di-`Include` dari `main.conf`. **Jangan** mount `/etc/nginx/modsec/` penuh — bakal nutupin `unicode.mapping` + `modsecurity.conf-recommended` bawaan image |
 
 **Gotcha penting:** `docker-compose.override.yml` **auto-kebaca** tiap `docker compose up` tanpa flag apa pun — jadi default sekarang = **Tahap 3**. Buat jalanin Tahap 1–2 (nginx polos, tanpa build modsec), override harus di-skip eksplisit:
 
@@ -164,11 +171,11 @@ Override cuma nulis yang **beda** dari base — `container_name`, `ports`, `env_
 | Tahap 3 (build + modsec) | `docker compose up -d` |
 | Tahap 1–2 (nginx polos) | `docker compose -f docker-compose.yml up -d` |
 
-### 3. `conf/nginx/tahap-3-modsecurity.conf` + `conf/nginx/modsec/main.conf`
+### 3. Iterasi 1 — rule inline (smoke test)
 
-Basisnya **Tahap 1** (reverse proxy polos), bukan Tahap 2, biar yang nge-block cuma ModSecurity dan gak ketuker sama rule native nginx. Directive ModSecurity dipisah ke file sendiri (`modsec/main.conf`) yang di-`include` — jadi mulai Tahap 5 tinggal ganti isi `main.conf` tanpa nyentuh conf nginx utama.
+Titik awal paling simpel: conf nginx + `main.conf` yang masih nempelin satu rule lewat `modsecurity_rules '...'`. Belum ada file rule terpisah, belum ada anomaly scoring. Cuma mau mastiin **engine-nya nyala dan bisa nge-block**.
 
-**`conf/nginx/tahap-3-modsecurity.conf`:**
+**`conf/nginx/tahap-3-modsecurity.conf` (Iterasi 1):**
 
 ```nginx
 load_module modules/ngx_http_modsecurity_module.so;
@@ -202,7 +209,7 @@ http {
 }
 ```
 
-**`conf/nginx/modsec/main.conf`:**
+**`conf/nginx/modsec/main.conf` (Iterasi 1):**
 
 ```nginx
 modsecurity on;
@@ -215,16 +222,13 @@ modsecurity_rules '
 | Directive | Fungsi |
 |-----------|--------|
 | `load_module` | Wajib di **main context** (paling atas, di luar `http`). Ini alasan dari Tahap 1 kita pakai conf nginx utuh |
-| `include /etc/nginx/modsec/main.conf` | Tarik directive ModSecurity dari file terpisah. File-nya di-mount read-only lewat override (Step 2), **bukan** lewat template envsubst, jadi gak kena substitusi variabel |
 | `modsecurity on` | Nyalain connector buat server ini. Request diteruskan ke libmodsecurity sebelum di-`proxy_pass` |
-| `modsecurity_rules '...'` | Rule **inline** di `main.conf`, cukup buat smoke test. Mulai Tahap 5 diganti `modsecurity_rules_file` yang nunjuk ke `modsecurity.conf` + file rule |
+| `modsecurity_rules '...'` | Rule **inline** — cukup buat smoke test. Diganti `modsecurity_rules_file` di Iterasi 2 |
 | `SecRuleEngine On` | Engine mode blocking. Default-nya `Off` kalau gak diset |
 | `SecRule ARGS:test "@streq attack" ...` | Kalau parameter `test` isinya persis `attack` → `deny` dengan `403` di phase 1 (request headers, query string udah kebaca) |
-| `id:100001` | Range custom rule `100000–199999`, sama kayak konvensi di stack CRS |
+| `id:100001` | Range custom rule `100000–199999` |
 
-Kenapa di-`include`, bukan ditempel langsung di conf nginx? Mulai Tahap 5 isi `main.conf` tumbuh (config engine + banyak SecRule). Misahin dari awal bikin conf nginx utama stabil, yang berubah cukup `main.conf`.
-
-Rule smoke test ditulis tanpa tanda kutip di `msg` biar gak bentrok sama kutip tunggal pembungkus `modsecurity_rules`. Gak ada `$` di rule, jadi aman walau kalau nanti dilewatin envsubst.
+Rule smoke test ditulis tanpa tanda kutip di `msg` biar gak bentrok sama kutip tunggal pembungkus `modsecurity_rules`.
 
 ### 4. Build & jalanin
 
@@ -236,71 +240,213 @@ scp -r Dockerfile docker-compose.yml docker-compose.override.yml conf anang@10.1
 # di VM
 cd /data/waf/scratch
 sed -i 's/^NGINX_CONF=.*/NGINX_CONF=tahap-3-modsecurity.conf/' .env
-docker compose build                       # lama, compile libmodsecurity + connector (override auto-kebaca)
+docker compose build                       # SEKALI, lama (compile libmodsecurity + connector), override auto-kebaca
 docker compose up -d --force-recreate
 docker exec waf-scratch nginx -t
 ```
 
-Semua command di atas **tanpa `-f`**, jadi override auto-kebaca dan yang jalan Tahap 3. Buat balik ke Tahap 1–2 nanti: ganti `NGINX_CONF` ke conf tahap itu, terus `docker compose -f docker-compose.yml up -d --force-recreate` (override di-skip, pakai image `nginx:1.28.0` polos tanpa build ulang).
+`docker compose build` cuma perlu sekali — image `waf-scratch:...` ke-cache. Habis itu tiap ganti config cukup `up -d --force-recreate` (gak build ulang). Semua command **tanpa `-f`** → override auto-kebaca (Tahap 3). Buat balik ke Tahap 1–2: ganti `NGINX_CONF`, terus `docker compose -f docker-compose.yml up -d --force-recreate`.
 
 Kalau build gagal, scroll ke error **pertama** di output `docker compose build`, bukan yang terakhir. Biasanya dependency `-dev` yang kurang (`configure: error: ... not found`).
 
 ---
 
-## Verifikasi
+## Verifikasi — Iterasi 1 ✅ (live 2026-10-22)
 
-> 🔬 **VALIDATE** — semua hasil masih harapan, diisi hasil asli pas dijalanin.
+### 1. Build sukses
 
-### 1. Artefak build
+Image ke-build mulus (compile ±11 menit di VM 2 core), tag `waf-scratch:nginx-1.28.0-modsec-3.0.17` jadi. Container `Up` setelah `up -d --force-recreate`, `nginx -t` lolos.
+
+### 2. Smoke test — block confirmed
+
+Akses dari Mac (`192.168.43.193`) lewat NAT pfSense (`http://192.168.43.100`):
+
+| Uji | Hasil |
+|-----|-------|
+| `GET /` | `302` (redirect normal DVWA) |
+| `GET /login.php` | `200` |
+| `GET /login.php?test=attack` | **`403`** — diblok ModSecurity |
+
+**`access.log`:**
+
+```
+192.168.43.193 - - [22/Oct/2026:08:08:06 +0000] "GET / HTTP/1.1" 302 0 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:158.0) Gecko/20100101 Firefox/158.0"
+192.168.43.193 - - [22/Oct/2026:08:08:06 +0000] "GET /login.php HTTP/1.1" 200 606 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:158.0) Gecko/20100101 Firefox/158.0"
+192.168.43.193 - - [22/Oct/2026:08:08:13 +0000] "GET /login.php?test=attack HTTP/1.1" 403 146 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:158.0) Gecko/20100101 Firefox/158.0"
+```
+
+**`error.log` (bukti definitif rule yang nge-block, bukan sekadar status 403):**
+
+```
+2026/10/22 08:08:13 [error] 35#35: *7 [client 192.168.43.193] ModSecurity: Access denied with code 403 (phase 1). Matched "Operator `StrEq' with parameter `attack' against variable `ARGS:test' (Value: `attack' ) [file "<<reference missing or not informed>>"] [line "3"] [id "100001"] [rev ""] [msg "tahap3-smoke-test"] ... [hostname "192.168.43.100"] [uri "/login.php"] [unique_id "17926564939.085935"] ..., client: 192.168.43.193, server: _, request: "GET /login.php?test=attack HTTP/1.1", host: "192.168.43.100"
+```
+
+![Smoke test `?test=attack` → 403](../asset/modsecurity-scratch/tahap-3-smoke-test-attack-403.png)
+
+Catatan temuan:
+- `[id "100001"]` + `[msg "tahap3-smoke-test"]` → yang nge-block beneran rule kita, bukan 403 dari sumber lain. Engine ON + connector `.so` ke-load + rule kebaca → **mesin nyala confirmed.**
+- `[file "<<reference missing or not informed>>"] [line "3"]` → kolom `file` kosong karena rule-nya **inline** (`modsecurity_rules`), belum dari file. Di Iterasi 2 (`modsecurity_rules_file`) kolom ini keisi nama file.
+- `client 192.168.43.193` = IP attacker asli kebawa bener (penting buat ingest Wazuh nanti).
+
+---
+
+## Keputusan: pindah ke file-based (Iterasi 2)
+
+Setelah mesin kebukti nyala, config dirombak dari inline ke **file-based**. Alasannya:
+
+1. **Lebih terorganisir** — rule kepisah per kategori di folder `rules/` (`rules-sqli.conf`, nanti `rules-xss.conf`, dll), gak numpuk di satu string inline.
+2. **Update gak pusing** — edit rule cukup di file `rules/`, conf nginx utama gak disentuh. Dan karena file di-mount langsung (bukan via template envsubst), ganti rule bisa `nginx -s reload` **tanpa `--force-recreate`**.
+3. **Hilang masalah kutip** — rule gak lagi kebungkus `modsecurity_rules '...'`, jadi `msg:'...'` + regex special char aman ditulis normal.
+4. **Mendekati real case** — ini persis cara CRS di-load (engine config + `Include rules/*.conf` + anomaly scoring). Jadi pondasi yang sama buat Tahap 7 (CRS manual) nanti.
+
+> Catatan scope: file-based + anomaly scoring ini sebenernya udah nyerempet materi **Tahap 5** (`04-modsecurity-basic-rules.md`). Diputusin ditaruh di sini sebagai kelanjutan natural dari build; kalau nanti kerasa kegedean, bisa dipindah ke doc `04-`.
+
+---
+
+## Step-by-Step — Iterasi 2 (file-based + kerangka anomaly scoring)
+
+🚧 **Config di bawah udah ditulis tapi BELUM di-deploy ke VM** — realisasi berikutnya. Verifikasi ditandai `🔬 VALIDATE`.
+
+### 5. `tahap-3-modsecurity.conf` — ganti ke `modsecurity_rules_file`
+
+`modsecurity on` tetep (directive nginx), `include` diganti `modsecurity_rules_file` yang nunjuk ke `main.conf`:
+
+```nginx
+        modsecurity on;
+        modsecurity_rules_file /etc/nginx/modsec/main.conf;
+```
+
+> Penting: `modsecurity on` + `modsecurity_rules_file` itu directive **nginx** (di conf nginx). `SecRuleEngine`, `SecRule`, `SecAudit*`, `Include` itu directive **ModSecurity** (di dalam file yang ditunjuk). Jangan naro `modsecurity on` di `main.conf` → nginx bakal error `unknown directive`.
+
+### 6. `conf/nginx/modsec/main.conf` — config engine + loader
+
+```nginx
+SecRuleEngine On
+
+SecAuditEngine RelevantOnly
+SecAuditLog /var/log/nginx/modsec_audit.log
+SecAuditLogParts ABIJDEFHZ
+SecAuditLogFormat JSON
+SecAuditLogType Serial
+SecAuditLogRelevantStatus "^(?:5|4(?!04))"
+SecRequestBodyAccess On
+SecRequestBodyLimit 13107200
+SecRequestBodyNoFilesLimit 131072
+
+SecDefaultAction "phase:1,pass,log,auditlog"
+SecDefaultAction "phase:2,pass,log,auditlog"
+SecAction "id:100900,phase:1,pass,nolog,t:none, \
+    setvar:tx.critical_anomaly_score=5, \
+    setvar:tx.error_anomaly_score=4, \
+    setvar:tx.warning_anomaly_score=3, \
+    setvar:tx.notice_anomaly_score=2, \
+    setvar:tx.inbound_anomaly_score_threshold=5, \
+    setvar:tx.outbound_anomaly_score_threshold=4, \
+    setvar:tx.inbound_anomaly_score_pl1=0, \
+    setvar:tx.blocking_paranoia_level=1, \
+    setvar:tx.detection_paranoia_level=2"
+
+Include /etc/nginx/modsec/rules/*.conf
+
+SecRule TX:INBOUND_ANOMALY_SCORE_PL1 "@ge %{tx.inbound_anomaly_score_threshold}" \
+    "id:100999,phase:2,deny,status:403,log, \
+    msg:'Inbound Anomaly Score Exceeded (score %{tx.inbound_anomaly_score_pl1})'"
+```
+
+| Bagian | Fungsi |
+|--------|--------|
+| `SecAuditEngine RelevantOnly` + `SecAuditLogRelevantStatus "^(?:5|4(?!04))"` | Audit **cuma** transaksi status 4xx/5xx (kecuali 404) → request normal gak nyampah |
+| `SecAuditLogFormat JSON` | Format JSON (butuh `libyajl` yang di-compile di Dockerfile) — konsisten sama stack CRS, enak di-ingest Wazuh (Tahap 8) |
+| `SecRequestBodyAccess On` | Biar `REQUEST_BODY` kebaca → SQLi lewat POST body ikut ke-scan |
+| `SecAction id:100900` (phase 1) | **Inisialisasi** tanpa syarat: nge-set skor severity (critical=5 … notice=2), threshold inbound/outbound, reset `pl1=0` + level paranoia |
+| `Include .../rules/*.conf` | Tarik semua file rule deteksi dari folder `rules/` |
+| `SecRule TX:INBOUND_ANOMALY_SCORE_PL1 "@ge ..."` (id 100999) | **Blocking eval**: kalau skor PL1 ≥ threshold → `deny` 403. Ini satu-satunya rule yang nge-block di model anomaly |
+
+### 7. `conf/nginx/modsec/rules/rules-sqli.conf` — rule deteksi
+
+```nginx
+SecRule ARGS,ARGS_NAMES,REQUEST_HEADERS,REQUEST_BODY,REQUEST_HEADERS:User-Agent "@detectSQLi" \
+    "id:100001, \
+    phase:2, \
+    block, \
+    nolog, \
+    auditlog, \
+    status:403, \
+    t:none,t:urlDecodeUni,t:lowercase, \
+    msg:'SQL Injection Attack Detected', \
+    severity:CRITICAL, \
+    tag:'paranoia-level/1', \
+    tag:'attack-sqli', \
+    setvar:'tx.inbound_anomaly_score_pl1=+%{tx.critical_anomaly_score}'"
+```
+
+Cara kerja model anomaly (beda sama direct-deny):
+
+- **`@detectSQLi`** + `t:urlDecodeUni,t:lowercase` → deteksi pakai libinjection (bukan regex mentah kayak Tahap 2), tahan encoding.
+- **`block`** → **bukan** block langsung; dengan `SecDefaultAction ... pass`, `block` efektifnya pass + **nyumbang skor** `tx.inbound_anomaly_score_pl1+= 5` (critical).
+- Rule **`100999`** yang mutusin `deny` kalau skor ≥ threshold. Karena critical=5 dan threshold=5, **satu hit SQLi = langsung block**.
+- **`_pl1`** di nama variabel = yang nentuin rule ini masuk ember **paranoia level 1** (bukan dari tag/severity). Severity nentuin **nilai** skor, `_plN` nentuin **ember**-nya.
+- **`nolog,auditlog`** → gak nulis error.log, cuma audit log → error.log bersih, isinya cuma keputusan block dari `100999`.
+
+### 8. Deploy Iterasi 2
+
+File udah ada di VM dari Iterasi 1, tinggal sync yang berubah + recreate (build **gak perlu** ulang):
 
 ```bash
-docker images waf-scratch                                                        # tag nginx-1.28.0-modsec-3.0.17 ada
-docker exec waf-scratch nginx -v                                                 # nginx version: nginx/1.28.0
+# dari Mac — sync file yang berubah
+scp docker-compose.override.yml anang@10.10.10.5:/data/waf/scratch/
+scp -r conf/nginx/tahap-3-modsecurity.conf conf/nginx/modsec \
+    anang@10.10.10.5:/data/waf/scratch/conf/nginx/
+
+# di VM
+cd /data/waf/scratch
+docker compose up -d --force-recreate
+docker exec waf-scratch nginx -t
+```
+
+---
+
+## Verifikasi — Iterasi 2 🔬 VALIDATE (belum dijalanin)
+
+> Semua di bawah masih harapan, diisi hasil asli pas realisasi.
+
+### 1. Config valid + engine load
+
+```bash
+docker exec waf-scratch nginx -t                                   # harus ok (cek syntax + Include)
+docker logs waf-scratch 2>&1 | tail -20                            # cari "rules loaded ..."
 docker exec waf-scratch ls -l /usr/lib/nginx/modules/ngx_http_modsecurity_module.so
-docker exec waf-scratch ls -l /usr/local/modsecurity/lib/
 docker exec waf-scratch sh -c 'ldd /usr/local/modsecurity/lib/libmodsecurity.so.3 | grep "not found"'   # harus kosong
-docker exec waf-scratch sh -c 'ldd /usr/lib/nginx/modules/ngx_http_modsecurity_module.so | grep modsecurity'
 ```
 
-| Cek | Harapan |
-|-----|---------|
-| `ldd ... grep "not found"` | Kosong. Kalau ada baris, berarti runtime library di stage final kurang, tambahin package-nya di `apt-get install` stage final |
-| `ldd` module | `libmodsecurity.so.3 => /usr/local/modsecurity/lib/libmodsecurity.so.3` |
-
-### 2. Engine hidup
-
-```bash
-docker logs waf-scratch 2>&1 | tail -20
-cat /data/waf/scratch/logs/error.log
-```
-
-Harapan: ada baris `ModSecurity-nginx v1.0.4 (rules loaded inline/local/remote: 1/0/0)` di `error.log` waktu nginx start. Angka `1` = rule smoke test kebaca.
-
-### 3. Smoke test
-
-Dari Mac:
+### 2. SQLi block (anomaly chain)
 
 ```bash
 WAF=http://192.168.43.100
-curl -s -o /dev/null -w "normal       %{http_code}\n" "$WAF/login.php"
-curl -s -o /dev/null -w "test=aman    %{http_code}\n" "$WAF/login.php?test=aman"
-curl -s -o /dev/null -w "test=attack  %{http_code}\n" "$WAF/login.php?test=attack"
+curl -s -o /dev/null -w "normal   %{http_code}\n" "$WAF/vulnerabilities/sqli/?id=1&Submit=Submit"
+curl -s -o /dev/null -w "sqli     %{http_code}\n" "$WAF/vulnerabilities/sqli/?id=1'+OR+'1'='1&Submit=Submit"
 ```
 
 | Uji | Harapan |
 |-----|---------|
-| normal | `200` |
-| `test=aman` | `200`, nilai beda, rule gak match |
-| `test=attack` | `403`, diblok ModSecurity |
+| normal | `200`/`302` |
+| SQLi (`' OR '1'='1`) | `403` — `100001` nyumbang skor 5 → `100999` deny |
 
-Di VM:
+### 3. Audit log JSON
 
 ```bash
-grep ModSecurity /data/waf/scratch/logs/error.log | tail -3
+cat /data/waf/scratch/logs/modsec_audit.log | tail -1 | jq .
 ```
 
-Harapan: `ModSecurity: Access denied with code 403 (phase 1). Matched "Operator `StrEq' with parameter `attack' against variable `ARGS:test' ..." [id "100001"] [msg "tahap3-smoke-test"]`.
+Harapan: entri JSON buat request yang 403, ada detail rule `100001` + `100999`.
 
-### 4. Pembanding sama Tahap 2
+**🔎 Yang mesti dipantau pas realisasi:**
+- **Permission `uid 101`** — `modsec_audit.log` ditulis worker uid 101; folder `./logs` (`anang:anang`, 775) kemungkinan bikin file gagal kebuat. Fix kayak stack CRS: sesuaikan owner/mode folder log.
+- **Paranoia belum fungsional penuh** — `tx.blocking_paranoia_level`/`tx.detection_paranoia_level` udah di-set, tapi belum ada logika gating yang baca keduanya (skip rule per-PL). Sekarang baru dipake buat label; block murni dari skor PL1 vs threshold.
+- **Outbound belum ada** — `tx.outbound_anomaly_score_threshold` di-set, tapi belum ada `SecResponseBodyAccess` + rule outbound. Jadi response belum difilter (baru angkanya ada).
 
-Payload yang lolos di Tahap 2 (`%3Cscript%3E`, `' OR '1'='1`) **masih lolos** di tahap ini, karena belum ada rule selain smoke test. Itu wajar: tahap ini cuma buktiin mesinnya nyala. Payload yang sama ditembak lagi di Tahap 5–6 setelah ada rule + transformation.
+---
+
+## Pembanding sama Tahap 2
+
+Payload yang lolos di Tahap 2 (`%3Cscript%3E`, `' OR '1'='1`) jadi bahan uji di Iterasi 2: `@detectSQLi` + transformation harusnya nangkep yang regex mentah Tahap 2 lolosin. Hasil adu lengkapnya (SQLi/XSS/traversal) dilanjut di Tahap 5–6.
