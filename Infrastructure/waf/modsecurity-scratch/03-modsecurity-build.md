@@ -1,6 +1,6 @@
 # 🔧 Tahap 3 — Build ModSecurity (libmodsecurity + Connector)
 
-> **Status:** Iterasi 1 (rule inline) ✅ **LIVE 2026-10-22** — engine kebukti nyala & nge-block. Iterasi 2 (file-based + kerangka anomaly scoring) 🚧 **config siap, belum di-deploy** (realisasi berikutnya); hasilnya ditandai `🔬 VALIDATE`. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 3–4.
+> **Status:** Iterasi 1 (rule inline) ✅ **LIVE 2026-10-22** — engine kebukti nyala & nge-block. Iterasi 2 (file-based + kerangka anomaly scoring) ✅ **LIVE 2026-10-23** — SQLi ke-block via anomaly chain, audit log JSON jalan (permission uid 101 resolved). Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 3–4.
 
 ## Tujuan
 
@@ -13,7 +13,7 @@ Rakit image nginx yang bisa jalanin ModSecurity, **dari source**, tanpa image si
 Dikerjain dalam **2 iterasi**:
 
 - **Iterasi 1 — rule inline:** satu rule smoke test ditempel langsung lewat `modsecurity_rules '...'`. Tujuannya cuma mastiin **mesinnya nyala**. ✅ *(udah live)*
-- **Iterasi 2 — file-based:** rule dipindah ke file sendiri (`modsecurity_rules_file` + `Include`), ditambah config engine, audit log JSON, dan kerangka anomaly scoring. Lebih terorganisir dan mendekati cara CRS kerja. 🚧 *(config siap, belum di-deploy)*
+- **Iterasi 2 — file-based:** rule dipindah ke file sendiri (`modsecurity_rules_file` + `Include`), ditambah config engine, audit log JSON, dan kerangka anomaly scoring. Lebih terorganisir dan mendekati cara CRS kerja. ✅ *(live 2026-10-23)*
 
 | Komponen | Versi | Sumber |
 |----------|-------|--------|
@@ -305,7 +305,7 @@ Setelah mesin kebukti nyala, config dirombak dari inline ke **file-based**. Alas
 
 ## Step-by-Step — Iterasi 2 (file-based + kerangka anomaly scoring)
 
-🚧 **Config di bawah udah ditulis tapi BELUM di-deploy ke VM** — realisasi berikutnya. Verifikasi ditandai `🔬 VALIDATE`.
+✅ **Config di bawah udah di-deploy & kebukti live 2026-10-23** (lihat Verifikasi Iterasi 2).
 
 ### 5. `tahap-3-modsecurity.conf` — ganti ke `modsecurity_rules_file`
 
@@ -400,50 +400,60 @@ scp -r conf/nginx/tahap-3-modsecurity.conf conf/nginx/modsec \
 
 # di VM
 cd /data/waf/scratch
+sudo chown 101:101 logs && sudo chmod 750 logs    # worker uid 101 bisa nulis audit log (ikut pola CRS, jangan 777)
 docker compose up -d --force-recreate
 docker exec waf-scratch nginx -t
 ```
 
 ---
 
-## Verifikasi — Iterasi 2 🔬 VALIDATE (belum dijalanin)
+## Verifikasi — Iterasi 2 ✅ (live 2026-10-23)
 
-> Semua di bawah masih harapan, diisi hasil asli pas realisasi.
+Deploy iter 2 (`--force-recreate`, **tanpa rebuild**) + test dari Mac (Firefox, `192.168.43.193`) ke DVWA via WAF `192.168.43.100`.
 
-### 1. Config valid + engine load
+### 1. Config valid + engine load ✅
 
-```bash
-docker exec waf-scratch nginx -t                                   # harus ok (cek syntax + Include)
-docker logs waf-scratch 2>&1 | tail -20                            # cari "rules loaded ..."
-docker exec waf-scratch ls -l /usr/lib/nginx/modules/ngx_http_modsecurity_module.so
-docker exec waf-scratch sh -c 'ldd /usr/local/modsecurity/lib/libmodsecurity.so.3 | grep "not found"'   # harus kosong
+`nginx -t` ok, `Include /etc/nginx/modsec/rules/*.conf` kebaca, module `.so` ke-load (udah kebukti sejak Iterasi 1).
+
+### 2. SQLi block (anomaly chain) ✅
+
+| Uji | Hasil | Keterangan |
+|-----|-------|------------|
+| SQLi (`id=1' OR '1'='1`) | **403** ✅ | `100001` detect (+5) → `100999` deny |
+| XSS (`<script>alert(1)</script>`) | **200 lolos** (alert jalan) | belum ada rule XSS — sesuai ekspektasi |
+
+![SQLi `' OR '1'='1` → 403](../asset/modsecurity-scratch/tahap-3-iter-2-sqli-or-403.png)
+![XSS `<script>` lolos 200](../asset/modsecurity-scratch/tahap-3-iter-2-xss-lolos.png)
+
+access.log (attacker Mac `192.168.43.193`):
+
+```
+192.168.43.193 - - [23/Oct/2026:02:33:51 +0000] "GET /vulnerabilities/sqli/?id=1%27+OR+%271%27%3D%271&Submit=Submit HTTP/1.1" 403 146 ...
+192.168.43.193 - - [23/Oct/2026:02:34:17 +0000] "GET /vulnerabilities/xss_r/?name=%3Cscript%3Ealert%281%29%3C%2Fscript%3E HTTP/1.1" 200 1489 ...
 ```
 
-### 2. SQLi block (anomaly chain)
+### 3. error.log — yang nge-block id `100999`, bukan `100001` ✅ *(ekspektasi, bukan bug)*
 
-```bash
-WAF=http://192.168.43.100
-curl -s -o /dev/null -w "normal   %{http_code}\n" "$WAF/vulnerabilities/sqli/?id=1&Submit=Submit"
-curl -s -o /dev/null -w "sqli     %{http_code}\n" "$WAF/vulnerabilities/sqli/?id=1'+OR+'1'='1&Submit=Submit"
+```
+2026/10/23 02:33:51 [error] 35#35: *1 [client 192.168.43.193] ModSecurity: Access denied with code 403 (phase 2). Matched "Operator `Ge' with parameter `5' against variable `TX:INBOUND_ANOMALY_SCORE_PL1' (Value: `5')" [file ".../main.conf"] [line "28"] [id "100999"] [msg "Inbound Anomaly Score Exceeded (score 5)"] ... [uri "/vulnerabilities/sqli/"] ...
 ```
 
-| Uji | Harapan |
-|-----|---------|
-| normal | `200`/`302` |
-| SQLi (`' OR '1'='1`) | `403` — `100001` nyumbang skor 5 → `100999` deny |
+Yang muncul di error.log **id `100999`**, bukan `100001` — ini justru nandain anomaly model jalan benar: `100001` (`nolog,auditlog`) deteksi SQLi senyap + nambah skor, `100999` (`log`) yang ambil keputusan deny → dia yang ke error.log. Satu hit SQLi critical (5) = threshold (5) → langsung block.
 
-### 3. Audit log JSON
+### 4. Audit log JSON — permission uid 101 ✅ RESOLVED
 
-```bash
-cat /data/waf/scratch/logs/modsec_audit.log | tail -1 | jq .
-```
+`modsec_audit.log` kebuat & keisi (worker uid 101 bisa nulis). Fix permission ngikut stack CRS: `chown 101:101 logs` + `chmod 750 logs` di VM (non-`-R`, jaga integritas audit — **jangan** `chmod 777`).
 
-Harapan: entri JSON buat request yang 403, ada detail rule `100001` + `100999`.
+Entri audit buat request 403 ngerekam **dua** message — jejak bukti lengkap:
+- `ruleId 100001` `"detected SQLi using libinjection"` `[file ".../rules/rules-sqli.conf"]` → deteksi
+- `ruleId 100999` `"Inbound Anomaly Score Exceeded (score 5)"` → keputusan block
+- `client_ip 192.168.43.193` → IP attacker asli kebawa (bukan IP container `172.18.0.2`)
 
-**🔎 Yang mesti dipantau pas realisasi:**
-- **Permission `uid 101`** — `modsec_audit.log` ditulis worker uid 101; folder `./logs` (`anang:anang`, 775) kemungkinan bikin file gagal kebuat. Fix kayak stack CRS: sesuaikan owner/mode folder log.
-- **Paranoia belum fungsional penuh** — `tx.blocking_paranoia_level`/`tx.detection_paranoia_level` udah di-set, tapi belum ada logika gating yang baca keduanya (skip rule per-PL). Sekarang baru dipake buat label; block murni dari skor PL1 vs threshold.
-- **Outbound belum ada** — `tx.outbound_anomaly_score_threshold` di-set, tapi belum ada `SecResponseBodyAccess` + rule outbound. Jadi response belum difilter (baru angkanya ada).
+(XSS 200 gak ada entri audit — `SecAuditLogRelevantStatus "^(?:5|4(?!04))"` cuma log 4xx/5xx, sesuai.) Kosmetik: `"Server":"nginx\u0000"` di response header audit = null byte efek `server_tokens off`, gak ngaruh.
+
+**Sisa yang belum fungsional di Tahap 3 (dilanjut di Tahap 5 → [`04-modsecurity-basic-rules.md`](./04-modsecurity-basic-rules.md)):**
+- **Paranoia gating** — `tx.*_paranoia_level` baru dipake buat label. ✅ **Direalisasi di Tahap 5**: gerbang `skipAfter` + ember PL2 (XSS shadow) kebukti live.
+- **Outbound** — `tx.outbound_anomaly_score_threshold` di-set tapi belum ada `SecResponseBodyAccess` + rule outbound.
 
 ---
 
