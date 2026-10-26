@@ -19,7 +19,7 @@ Fokus percobaan ini **cuma reverse proxy**, belum ada WAF sama sekali (belum ada
 
 > Config tahap ini sekarang ada di [`conf/nginx/tahap-1-reverse-proxy.conf`](./conf/nginx/tahap-1-reverse-proxy.conf). Jalanin ulang: set `NGINX_CONF=tahap-1-reverse-proxy.conf` di `.env` VM, lalu `docker compose up -d --force-recreate` (lihat [`README.md`](./README.md)). Snapshot di bawah nunjukin compose waktu Tahap 1 dikerjain, sebelum conf dipisah per tahap.
 
-Pakai image resmi **`nginx:1.28.0`**. Versi ini dikunci karena di Tahap 4, connector ModSecurity harus di-compile dari **source nginx dengan versi yang sama persis**.
+Pakai image resmi **`nginx:1.28.0`**. Versi ini dikunci karena di Tahap 3, connector ModSecurity harus di-compile dari **source nginx dengan versi yang sama persis**.
 
 **File di repo → VM `/data/waf/scratch`:**
 
@@ -38,7 +38,7 @@ Pakai image resmi **`nginx:1.28.0`**. Versi ini dikunci karena di Tahap 4, conne
 BACKEND_URL=http://10.10.10.10:80
 ```
 
-`conf/nginx/nginx.conf`: config nginx **utuh** (blok `events` + `http` + `server`), bukan cuma potongan server block. Config utuh ini sengaja dipakai dari awal, karena di Tahap 4 baris `load_module` buat connector ModSecurity harus ditaruh di **main context** (paling atas `nginx.conf`, di luar blok `http`).
+`conf/nginx/nginx.conf`: config nginx **utuh** (blok `events` + `http` + `server`), bukan cuma potongan server block. Config utuh ini sengaja dipakai dari awal, karena di Tahap 3 baris `load_module` buat connector ModSecurity harus ditaruh di **main context** (paling atas `nginx.conf`, di luar blok `http`).
 
 Biar `${BACKEND_URL}` keisi dari `.env`, file ini di-mount sebagai **template**:
 

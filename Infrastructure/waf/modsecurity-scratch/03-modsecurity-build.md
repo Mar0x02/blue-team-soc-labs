@@ -1,6 +1,6 @@
 # 🔧 Tahap 3 — Build ModSecurity (libmodsecurity + Connector)
 
-> **Status:** Iterasi 1 (rule inline) ✅ **LIVE 2026-10-22** — engine kebukti nyala & nge-block. Iterasi 2 (file-based + kerangka anomaly scoring) ✅ **LIVE 2026-10-23** — SQLi ke-block via anomaly chain, audit log JSON jalan (permission uid 101 resolved). Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 3–4.
+> **Status:** Iterasi 1 (rule inline) ✅ **LIVE 2026-10-22** — engine kebukti nyala & nge-block. Iterasi 2 (file-based + kerangka anomaly scoring) ✅ **LIVE 2026-10-23** — SQLi ke-block via anomaly chain, audit log JSON jalan (permission uid 101 resolved). Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 3.
 
 ## Tujuan
 
@@ -114,7 +114,7 @@ COPY --from=builder /src/ModSecurity/modsecurity.conf-recommended /etc/nginx/mod
 | `--add-dynamic-module` + `make modules` | Cuma compile module-nya, gak compile ulang nginx |
 | Stage final | Cuma runtime library (tanpa `-dev`, tanpa compiler) + `libmodsecurity` + `.so`. Image jauh lebih kecil dari stage builder |
 | `/usr/local/modsecurity/lib/` path sama | Connector di-link pakai **rpath** ke path ini. Kalau path di stage final beda, module gagal load (`libmodsecurity.so.3: cannot open shared object file`) |
-| `unicode.mapping`, `modsecurity.conf-recommended` | Belum dipakai penuh di tahap ini, disiapin buat Tahap 5 (`SecUnicodeMapFile`, config engine lengkap) |
+| `unicode.mapping`, `modsecurity.conf-recommended` | Belum dipakai penuh di tahap ini, disiapin buat Tahap 4 (`SecUnicodeMapFile`, config engine lengkap) |
 
 ### 2. `docker-compose.yml` + `docker-compose.override.yml`
 
@@ -297,9 +297,9 @@ Setelah mesin kebukti nyala, config dirombak dari inline ke **file-based**. Alas
 1. **Lebih terorganisir** — rule kepisah per kategori di folder `rules/` (`rules-sqli.conf`, nanti `rules-xss.conf`, dll), gak numpuk di satu string inline.
 2. **Update gak pusing** — edit rule cukup di file `rules/`, conf nginx utama gak disentuh. Dan karena file di-mount langsung (bukan via template envsubst), ganti rule bisa `nginx -s reload` **tanpa `--force-recreate`**.
 3. **Hilang masalah kutip** — rule gak lagi kebungkus `modsecurity_rules '...'`, jadi `msg:'...'` + regex special char aman ditulis normal.
-4. **Mendekati real case** — ini persis cara CRS di-load (engine config + `Include rules/*.conf` + anomaly scoring). Jadi pondasi yang sama buat Tahap 7 (CRS manual) nanti.
+4. **Mendekati real case** — ini persis cara CRS di-load (engine config + `Include rules/*.conf` + anomaly scoring). Jadi pondasi yang sama buat Tahap 5 (CRS manual) nanti.
 
-> Catatan scope: file-based + anomaly scoring ini sebenernya udah nyerempet materi **Tahap 5** (`04-modsecurity-basic-rules.md`). Diputusin ditaruh di sini sebagai kelanjutan natural dari build; kalau nanti kerasa kegedean, bisa dipindah ke doc `04-`.
+> Catatan scope: file-based + anomaly scoring ini sebenernya udah nyerempet materi **Tahap 4** (`04-modsecurity-basic-rules.md`). Diputusin ditaruh di sini sebagai kelanjutan natural dari build; kalau nanti kerasa kegedean, bisa dipindah ke doc `04-`.
 
 ---
 
@@ -356,7 +356,7 @@ SecRule TX:INBOUND_ANOMALY_SCORE_PL1 "@ge %{tx.inbound_anomaly_score_threshold}"
 | Bagian | Fungsi |
 |--------|--------|
 | `SecAuditEngine RelevantOnly` + `SecAuditLogRelevantStatus "^(?:5|4(?!04))"` | Audit **cuma** transaksi status 4xx/5xx (kecuali 404) → request normal gak nyampah |
-| `SecAuditLogFormat JSON` | Format JSON (butuh `libyajl` yang di-compile di Dockerfile) — konsisten sama stack CRS, enak di-ingest Wazuh (Tahap 8) |
+| `SecAuditLogFormat JSON` | Format JSON (butuh `libyajl` yang di-compile di Dockerfile) — konsisten sama stack CRS, enak di-ingest Wazuh (Tahap 6) |
 | `SecRequestBodyAccess On` | Biar `REQUEST_BODY` kebaca → SQLi lewat POST body ikut ke-scan |
 | `SecAction id:100900` (phase 1) | **Inisialisasi** tanpa syarat: nge-set skor severity (critical=5 … notice=2), threshold inbound/outbound, reset `pl1=0` + level paranoia |
 | `Include .../rules/*.conf` | Tarik semua file rule deteksi dari folder `rules/` |
@@ -451,12 +451,12 @@ Entri audit buat request 403 ngerekam **dua** message — jejak bukti lengkap:
 
 (XSS 200 gak ada entri audit — `SecAuditLogRelevantStatus "^(?:5|4(?!04))"` cuma log 4xx/5xx, sesuai.) Kosmetik: `"Server":"nginx\u0000"` di response header audit = null byte efek `server_tokens off`, gak ngaruh.
 
-**Sisa yang belum fungsional di Tahap 3 (dilanjut di Tahap 5 → [`04-modsecurity-basic-rules.md`](./04-modsecurity-basic-rules.md)):**
-- **Paranoia gating** — `tx.*_paranoia_level` baru dipake buat label. ✅ **Direalisasi di Tahap 5**: gerbang `skipAfter` + ember PL2 (XSS shadow) kebukti live.
+**Sisa yang belum fungsional di Tahap 3 (dilanjut di Tahap 4 → [`04-modsecurity-basic-rules.md`](./04-modsecurity-basic-rules.md)):**
+- **Paranoia gating** — `tx.*_paranoia_level` baru dipake buat label. ✅ **Direalisasi di Tahap 4**: gerbang `skipAfter` + ember PL2 (XSS shadow) kebukti live.
 - **Outbound** — `tx.outbound_anomaly_score_threshold` di-set tapi belum ada `SecResponseBodyAccess` + rule outbound.
 
 ---
 
 ## Pembanding sama Tahap 2
 
-Payload yang lolos di Tahap 2 (`%3Cscript%3E`, `' OR '1'='1`) jadi bahan uji di Iterasi 2: `@detectSQLi` + transformation harusnya nangkep yang regex mentah Tahap 2 lolosin. Hasil adu lengkapnya (SQLi/XSS/traversal) dilanjut di Tahap 5–6.
+Payload yang lolos di Tahap 2 (`%3Cscript%3E`, `' OR '1'='1`) jadi bahan uji di Iterasi 2: `@detectSQLi` + transformation harusnya nangkep yang regex mentah Tahap 2 lolosin. Hasil adu lengkapnya (SQLi/XSS/traversal) dilanjut di Tahap 4.
