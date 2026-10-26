@@ -1,6 +1,6 @@
-# 🧱 Tahap 5 — SecRule Tulisan Sendiri + Anomaly Scoring & Paranoia
+# 🧱 Tahap 4 — SecRule Tulisan Sendiri + Anomaly Scoring & Paranoia
 
-> **Status:** ✅ **LIVE 2026-10-23** — SQLi & XSS custom rule jalan, anomaly scoring (PL1 block) + paranoia gating (PL2 detection-only) kebukti via adu payload. Docker **sama persis** dengan [Tahap 3](./03-modsecurity-build.md) — tahap ini **murni nambah rule** di atas engine yang udah jadi, gak ada build/compose baru. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 5–6.
+> **Status:** 🚧 **LIVE (progres)** — SQLi & XSS custom rule + anomaly scoring (PL1 block) + paranoia gating (PL2 detection-only) kebukti 2026-10-23; path traversal `deny` langsung kebukti 2026-10-26; mekanisme promote PL2→block (fold `100950`/`100951`) udah ada (flip-test nyusul). Docker **sama persis** dengan [Tahap 3](./03-modsecurity-build.md) — tahap ini **murni nambah rule** di atas engine yang udah jadi, gak ada build/compose baru. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 4.
 
 ## Tujuan
 
@@ -66,22 +66,31 @@ SecAction "id:100900,phase:1,pass,nolog,t:none, \
     setvar:tx.inbound_anomaly_score_threshold=5, \
     setvar:tx.inbound_anomaly_score_pl1=0, \
     setvar:tx.inbound_anomaly_score_pl2=0, \
+    setvar:tx.inbound_anomaly_score=0, \
     setvar:tx.blocking_paranoia_level=1, \
     setvar:tx.detection_paranoia_level=2"
 
 Include /etc/nginx/modsec/rules/*.conf
 
-SecRule TX:INBOUND_ANOMALY_SCORE_PL1 "@ge %{tx.inbound_anomaly_score_threshold}" \
+SecAction "id:100950,phase:2,pass,nolog, \
+    setvar:tx.inbound_anomaly_score=+%{tx.inbound_anomaly_score_pl1}"
+
+SecRule TX:BLOCKING_PARANOIA_LEVEL "@ge 2" \
+    "id:100951,phase:2,pass,nolog, \
+    setvar:tx.inbound_anomaly_score=+%{tx.inbound_anomaly_score_pl2}"
+
+SecRule TX:INBOUND_ANOMALY_SCORE "@ge %{tx.inbound_anomaly_score_threshold}" \
     "id:100999,phase:2,deny,status:403,log, \
-    msg:'Inbound Anomaly Score Exceeded (score %{tx.inbound_anomaly_score_pl1})'"
+    msg:'Inbound Anomaly Score Exceeded (score %{tx.inbound_anomaly_score})'"
 ```
 
 | Directive | Fungsi |
 |-----------|--------|
 | `SecAuditLogRelevantStatus "^(?:5\|4(?!04))"` | Audit cuma 4xx/5xx (kecuali 404). Tapi rule yang match dengan `auditlog` bikin transaksinya "relevant" → **tetap keaudit walau 200** |
 | `SecDefaultAction phase:2 pass` | Default non-disruptif → `block` di rule = `pass` (mode anomaly) |
-| `100900` init | Ember `pl1`/`pl2` di-nol-in; threshold inbound `5`; blocking `1`, detection `2` |
-| `100999` keputusan | **Satu-satunya** yang `deny`. Baca `pl1` doang → cuma PL1 yang bisa nge-block |
+| `100900` init | Ember `pl1`/`pl2` + skor gabungan `tx.inbound_anomaly_score` di-nol-in; threshold inbound `5`; blocking `1`, detection `2` |
+| `100950`/`100951` fold | Jumlahin ember PL ke **skor gabungan**: PL1 selalu (`SecAction`), PL2 **cuma kalau `blocking ≥ 2`** (`SecRule` bersyarat) |
+| `100999` keputusan | Satu-satunya yang `deny` via scoring. Baca **skor gabungan** → naikin `blocking_paranoia_level=2` = promote PL2 jadi blocking **tanpa** nyentuh rule PL2 |
 
 ### 2. Rule PL1 — produksi, nge-block (`rules/rules-sqli.conf`, `rules/rules-xss.conf`)
 
@@ -115,7 +124,7 @@ SecRule ARGS,ARGS_NAMES,REQUEST_HEADERS,REQUEST_BODY,REQUEST_HEADERS:User-Agent 
 
 ### 3. Rule PL2 — shadow / tuning (`rules/tune-rules.conf`)
 
-Rule yang **masih dituning / rawan false positive** ditaruh di sini, dibungkus **gerbang** + ember `pl2`. Karena `100999` cuma baca `pl1`, PL2 **cuma ke-log, gak block** (shadow mode).
+Rule yang **masih dituning / rawan false positive** ditaruh di sini, dibungkus **gerbang** + ember `pl2`. Selama `blocking=1`, ember `pl2` **gak di-fold** ke skor gabungan, jadi PL2 **cuma ke-log, gak block** (shadow mode).
 
 ```
 SecRule TX:DETECTION_PARANOIA_LEVEL "@lt 2" \
@@ -139,24 +148,82 @@ SecMarker END-PL2
 
 - **Gerbang** (`100901`): kalau `detection_paranoia_level < 2` → `skipAfter:END-PL2` (lompat ke marker, lewatin semua PL2). Sekarang detection = `2` → `2 @lt 2` = false → gerbang gak aktif → PL2 jalan.
 - **`pass`**: PL2 ini detection-only, gak boleh block sendiri.
-- **`setvar pl2`**: nuang skor ke ember **PL2** (bukan PL1) → gak keitung `100999`.
+- **`setvar pl2`**: nuang skor ke ember **PL2** (bukan PL1) → gak di-fold ke skor gabungan selama `blocking=1`.
 - Regex taglist sengaja **noisy** (match `<form>`, `<input>`, `<label>` yang legit) → makanya cocok di shadow dulu, bukan langsung block.
 
-### 4. Kenapa dipisah 3 file + urutan load
+### 4. Rule high-confidence — direct `deny` (traversal + command injection)
+
+Beda kelas dari anomaly: pola yang **nyaris mustahil legit** langsung `deny` (block seketika, **gak lewat scoring/threshold**). Cocok buat path traversal / sensitive path / command injection.
+
+**4a. Path traversal** (`rules/rules-path-traversal.conf`):
+
+```
+SecRule ARGS,ARGS_NAMES,REQUEST_HEADERS,REQUEST_BODY "@rx (?i)(?:\.\./|\.\.\\|/etc/passwd|/proc/self/environ|/bin/bash|/bin/sh|/usr/bin/...)\b" \
+    "id:100004, \
+    phase:2, \
+    deny, \
+    nolog, \
+    auditlog, \
+    t:none,t:urlDecodeUni,t:lowercase,t:htmlEntityDecode, \
+    msg:'Path Traversal Attack Detected', \
+    severity:CRITICAL, \
+    tag:'paranoia-level/1', \
+    tag:'attack-path-traversal'"
+```
+
+| Bagian | Arti |
+|--------|------|
+| `deny` (bukan `block`/`pass`) | **Block seketika** di tempat, gak peduli skor/PL/gerbang |
+| **gak ada `setvar`** | Gak nyumbang skor — keputusannya si rule sendiri, bukan `100999` |
+| `\.\./`, `/etc/passwd`, path binary | Target LFI/RCE DVWA (File Inclusion + Command Injection) |
+
+> **Scope DVWA:** list path binary (`/bin/bash`, `/usr/bin/*`) sengaja broad — di DVWA mereka = **attack indicator** (Command Injection / LFI), gak ada traffic legit yang kena. Kalau WAF dipasang di depan app lain, review ulang (bisa false positive). **Gotcha:** trailing `\b` bikin `../` **murni** (tanpa nyentuh file terdaftar) bisa lolos; payload DVWA FI (`../../../../etc/passwd`) tetap kena lewat cabang `/etc/passwd`.
+
+**4b. Command injection** (`rules/rules-command-injection.conf`):
+
+Deteksi dari **separator shell + command** (bukan libinjection — gak ada buat CI). Fitur DVWA `exec` itu buat ping IP, jadi serangannya = nyisipin command di belakang IP (`127.0.0.1;whoami`).
+
+```
+SecRule ARGS,ARGS_NAMES,REQUEST_HEADERS "@rx (?i)(?:[;|&\x60]|\$\(|\|\|)\s*(?:whoami|id|uname|hostname|wget|curl|nc|cat\s+/etc/passwd|...)\b(?!=)" \
+    "id:100005, \
+    phase:2, \
+    deny, \
+    nolog, \
+    auditlog, \
+    t:none,t:urlDecodeUni,t:lowercase,t:htmlEntityDecode, \
+    msg:'Command Injection Attack Detected', \
+    severity:CRITICAL, \
+    tag:'paranoia-level/1', \
+    tag:'attack-command-injection'"
+```
+
+| Bagian | Arti |
+|--------|------|
+| `(?:[;\|&\x60]\|\$\(\|\|\|)` | **Separator shell**: `;` `\|` `&` `` ` `` `$(` `\|\|` — pemisah antar-command |
+| `\s*(?:whoami\|id\|...)` | **Command** sesudah separator (kombinasi separator+command = high confidence) |
+| `\b(?!=)` | **Negative lookahead** — tolak kalau command diikuti `=` → `&id=5` (param legit / Referer) **gak** FP |
+| **tanpa `t:cmdLine`** | `cmdLine` ganti `;`→spasi & hapus spasi sebelum `/` → malah **ngerusak** regex ini (`;whoami` jadi gak kena). Dibuang. |
+| `ARGS` (bukan `REQUEST_BODY`) | `ARGS` = GET **+ POST** (parsed) → payload POST `ip` tetep kena, tanpa FP `&id=` dari body mentah |
+
+> **Catatan coverage:** header injection (mis. Shellshock via `User-Agent`) belum jadi fokus — DVWA exec vektornya `ARGS:ip`. `REQUEST_HEADERS` di-scan tapi presisi dijaga `(?!=)`. Kalau ada skenario serang-via-header, pertajam lagi (target header spesifik / command list lebih ketat).
+
+### 5. Kenapa dipisah per file + urutan load
 
 `Include /etc/nginx/modsec/rules/*.conf` baca file **urut alfabetis**:
 
 ```
-rules-sqli.conf   → 100001 (PL1)
-rules-xss.conf    → 100002 (PL1)
-tune-rules.conf   → 100901 gerbang → 100003 (PL2) → END-PL2
+rules-command-injection.conf → 100005 (deny langsung)
+rules-path-traversal.conf    → 100004 (deny langsung)
+rules-sqli.conf              → 100001 (PL1)
+rules-xss.conf               → 100002 (PL1)
+tune-rules.conf             → 100901 gerbang → 100003 (PL2) → END-PL2
 ```
 
-`r` < `t`, jadi `tune-rules.conf` **ke-load terakhir** → gerbang otomatis ada **setelah semua rule PL1**. Ini penting: gerbang `skipAfter:END-PL2` cuma boleh ngebungkus rule PL2. Kalau rule PL1 kejepit di antara gerbang & marker, dia ikut ke-skip pas `detection=1` — padahal PL1 harus selalu jalan.
+`r`/`c` < `t`, jadi `tune-rules.conf` **ke-load terakhir** → gerbang otomatis ada **setelah semua rule PL1 / deny**. Ini penting: gerbang `skipAfter:END-PL2` cuma boleh ngebungkus rule PL2. Kalau rule PL1/deny kejepit di antara gerbang & marker, dia ikut ke-skip pas `detection=1` — padahal mereka harus selalu jalan.
 
-> Aturan: file rule PL1 produksi = `rules-*.conf`. Rule PL2 yang dituning = dalam `tune-rules.conf`, di antara gerbang & `END-PL2`.
+> Aturan: file rule PL1 / `deny` produksi = `rules-*.conf`. Rule PL2 yang dituning = dalam `tune-rules.conf`, di antara gerbang & `END-PL2`.
 
-### 5. Deploy (docker sama Tahap 3)
+### 6. Deploy (docker sama Tahap 3)
 
 ```bash
 # dari Mac — sync file rule yang berubah
@@ -182,7 +249,7 @@ Test dari Mac (Firefox, `192.168.43.193`) ke DVWA via WAF `192.168.43.100`.
 | SQLi `id=1' OR '1'='1` | **403** | `100001` detect → `pl1`+5 → `100999` deny |
 | XSS `<script>alert(1)</script>` | **403** | `100002` detect → `pl1`+5 → `100999` deny |
 
-![XSS `<script>` → 403 (PL1 block)](../asset/modsecurity-scratch/tahap-3-xss-detectxss-pl1-403.png)
+![XSS `<script>` → 403 (PL1 block)](../asset/modsecurity-scratch/tahap-4-xss-detectxss-pl1-403.png)
 
 Audit log XSS `<script>` nangkep **1 entri, 3 message** — jejak chain lengkap: `100002` (pl1) + `100003` (pl2, ikut match) + `100999` (keputusan deny). Yang bikin block = PL1; PL2 cuma nebeng log.
 
@@ -194,9 +261,36 @@ Payload yang **match regex taglist tapi LOLOS libinjection**: `name=<form>`.
 |---------|-------|------|
 | `name=<form>` | **200** (halaman DVWA kebuka normal) | cuma `100003` (pl2) → `100999` gak baca pl2 → **log doang, gak block** |
 
-![`<form>` → 200, PL2 cuma ke-log](../asset/modsecurity-scratch/tahap-3-xss-form-pl2-detection-200.png)
+![`<form>` → 200, PL2 cuma ke-log](../asset/modsecurity-scratch/tahap-4-xss-form-pl2-detection-200.png)
 
 Audit log `<form>` cuma **1 message**: `ruleId 100003` tag `paranoia-level/2`, `is_interrupted: false`, `http_code 200`. **Gak ada** `100002` (libinjection bener, `<form>` bukan XSS) & **gak ada** `100999`. Inilah bukti murni **detection ≠ blocking**.
+
+### 3. Direct `deny` — path traversal (live 2026-10-26)
+
+DVWA File Inclusion, payload `?page=../../../../etc/passwd`:
+
+| Payload | Hasil | Rule |
+|---------|-------|------|
+| `fi/?page=../../../../etc/passwd` | **403** | `100004` `deny` **langsung** (match cabang `/etc/passwd`) |
+
+![Path traversal `/etc/passwd` → 403](../asset/modsecurity-scratch/tahap-4-path-traversal-403.png)
+
+Audit log cuma **1 message**: `ruleId 100004` `is_interrupted: true`, **gak ada `100999`**. Beda sama SQLi/XSS: block-nya dari **rule-nya sendiri** (`deny`), bukan lewat chain scoring. Inilah sifat **high-confidence direct deny** — langsung, tanpa threshold.
+
+### 4. Direct `deny` — command injection (live 2026-10-26)
+
+DVWA Command Injection (`exec`, form POST field `ip`):
+
+| Payload (`ip=`) | Hasil | Rule |
+|-----------------|-------|------|
+| `127.0.0.1;whoami` | **403** | `100005` `deny` (`ARGS:ip` = `;whoami`) |
+| `127.0.0.1&whoami`, `127.0.0.1\|whoami` | **403** | sama (diuji, gak di-SS) |
+| `127.0.0.1` (ping normal) | **200** — ping jalan (4 packets, 0% loss) | gak match → fitur legit aman |
+
+![Command injection `;whoami` → 403](../asset/modsecurity-scratch/tahap-4-command-injection-403.png)
+![Ping IP legit → 200, fitur jalan](../asset/modsecurity-scratch/tahap-4-command-injection-ping-legit-200.png)
+
+Dua bukti penting: (1) payload kena di **`ARGS:ip`** walau dikirim **POST** → `ARGS` nyakup body form; (2) **ping legit gak keblok** → rule presisi (cuma nendang separator+command, bukan IP biasa).
 
 ### Ringkasan bukti
 
@@ -211,7 +305,8 @@ Audit log `<form>` cuma **1 message**: `ruleId 100003` tag `paranoia-level/2`, `
 
 ## Catatan & Batasan (buat tahap lanjut)
 
-- **Promote PL2 → blocking**: ubah `100999` biar ikut jumlahin `pl2` kalau `blocking_paranoia_level ≥ 2` (atau tambah eval per-PL). Rule PL2-nya tetap `pass` — yang nge-block tetap si eval. Belum dikerjain.
+- **Promote PL2 → blocking**: ✅ **mekanisme udah ada** (`100950`/`100951` fold + `100999` baca skor gabungan). Tinggal set `blocking_paranoia_level=2` → `--force-recreate` → `<form>` jadi 403. Flip-test live **belum** dicatat (nyusul).
+- **Rule high-confidence (direct `deny`)**: ✅ path traversal (`100004`) + command injection (`100005`) live — sekali match = `deny` langsung tanpa scoring. Sensitive path/command lain bisa nyusul.
+- **Header injection** (mis. Shellshock via `User-Agent`): `REQUEST_HEADERS` di-scan di rule CI (presisi dijaga `(?!=)`), tapi belum ada skenario lab khusus — pertajam kalau diperluin.
 - **Paranoia gating penuh (PL3–4)**: tiap level di atas PL1 butuh gerbang + marker sendiri (`@lt N`). Sekarang baru PL2.
 - **Outbound**: `SecResponseBodyAccess` + rule outbound belum ada (threshold di-set tapi belum dipakai).
-- **Rule high-confidence (direct `deny`)**: path traversal / sensitive path lebih cocok `deny` langsung (sekali match = pasti jahat, gak perlu scoring) — rencana berikutnya.

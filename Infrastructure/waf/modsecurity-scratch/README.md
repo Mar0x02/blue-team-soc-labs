@@ -38,14 +38,14 @@ Tiap tahap punya file sendiri dengan format Tujuan → Prerequisites → Step-by
 |-------|------|---------------|-----------------|--------|
 | 1 | [`01-nginx-reverse-proxy.md`](./01-nginx-reverse-proxy.md) | **Nginx polos** sebagai reverse proxy ke DVWA (tanpa WAF) | `proxy_pass`, header `X-Real-IP` / `X-Forwarded-For`, template envsubst | ✅ |
 | 2 | [`02-nginx-native-filter.md`](./02-nginx-native-filter.md) | **Rule native nginx** (tanpa ModSecurity) + log ke file | `map`, `if`/`return`, `location`, `limit_req`, `log_format`, dan **batasan** WAF berbasis regex mentah | ✅ |
-| 3–4 | [`03-modsecurity-build.md`](./03-modsecurity-build.md) | **Compile libmodsecurity v3** + **connector** `ModSecurity-nginx` (`.so`, versi nginx harus sama persis) | Dependency engine (PCRE2, libxml2, yajl, curl, dll), `load_module` | 🚧 |
-| 5–6 | [`04-modsecurity-basic-rules.md`](./04-modsecurity-basic-rules.md) | **SecRule tulisan sendiri** tanpa CRS + **anomaly scoring** + **paranoia gating** (PL1 block vs PL2 shadow) | variable / operator (`@detectSQLi`,`@detectXSS`,`@rx`) / transformation / action, `pass`/`block`/`deny`, `skipAfter`/`SecMarker`, ember skor per-PL | 🚧 |
-| 7 | `05-modsecurity-owasp-crs.md` | **Pasang OWASP CRS manual** _(opsional)_ | `crs-setup.conf`, urutan include, anomaly scoring, paranoia | ⏸️ Diputusin nanti |
-| 8 | `06-wazuh-integration.md` | **Log → Wazuh** | `<localfile>` + ingest ke agent `waf` | ⏳ |
+| 3 | [`03-modsecurity-build.md`](./03-modsecurity-build.md) | **Compile libmodsecurity v3** + **connector** `ModSecurity-nginx` (`.so`, versi nginx harus sama persis) | Dependency engine (PCRE2, libxml2, yajl, curl, dll), `load_module` | ✅ |
+| 4 | [`04-modsecurity-basic-rules.md`](./04-modsecurity-basic-rules.md) | **SecRule tulisan sendiri** tanpa CRS + **anomaly scoring** + **paranoia gating** (PL1 block vs PL2 shadow) | variable / operator (`@detectSQLi`,`@detectXSS`,`@rx`) / transformation / action, `pass`/`block`/`deny`, `skipAfter`/`SecMarker`, ember skor per-PL | 🚧 |
+| 5 | `05-modsecurity-owasp-crs.md` | **Pasang OWASP CRS manual** _(opsional)_ | `crs-setup.conf`, urutan include, anomaly scoring, paranoia | ⏸️ Diputusin nanti |
+| 6 | `06-wazuh-integration.md` | **Log → Wazuh** | `<localfile>` + ingest ke agent `waf` | ⏳ |
 
 File yang belum ada linknya dibikin pas tahapnya mulai dikerjain.
 
-Tahap 7 **opsional**. Stack ini bisa tetap pakai SecRule tulisan sendiri tanpa CRS, karena perbandingan dengan CRS udah ada di stack [`../modsecurity-crs/`](../modsecurity-crs/README.md). Tahap 8 (Wazuh) tetap jalan dengan atau tanpa Tahap 7.
+Tahap 5 **opsional**. Stack ini bisa tetap pakai SecRule tulisan sendiri tanpa CRS, karena perbandingan dengan CRS udah ada di stack [`../modsecurity-crs/`](../modsecurity-crs/README.md). Tahap 6 (Wazuh) tetap jalan dengan atau tanpa Tahap 5.
 
 Dockerfile pakai **multi-stage build**: stage builder buat compile, stage final cuma berisi nginx + module + library runtime. Versi tiap komponen (nginx, ModSecurity, connector, CRS) dikunci dan dicatat di sini.
 
@@ -72,7 +72,9 @@ modsecurity-scratch/
         ├── tahap-3-modsecurity.conf
         └── modsec/
             ├── main.conf         ← engine + init + keputusan (Tahap 3+)
-            └── rules/            ← SecRule custom (Tahap 5)
+            └── rules/            ← SecRule custom (Tahap 4)
+                ├── rules-command-injection.conf ← direct deny (shell syntax)
+                ├── rules-path-traversal.conf ← direct deny (traversal/LFI)
                 ├── rules-sqli.conf   ← PL1 @detectSQLi (block)
                 ├── rules-xss.conf    ← PL1 @detectXSS (block)
                 └── tune-rules.conf   ← PL2 shadow + gerbang (detection)
