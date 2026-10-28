@@ -1,6 +1,6 @@
 # 🧱 Tahap 4 — SecRule Tulisan Sendiri + Anomaly Scoring & Paranoia
 
-> **Status:** 🚧 **LIVE (progres)** — SQLi & XSS custom rule + anomaly scoring (PL1 block) + paranoia gating (PL2 detection-only) kebukti 2026-10-23; path traversal `deny` langsung kebukti 2026-10-26; mekanisme promote PL2→block (fold `100950`/`100951`) udah ada (flip-test nyusul). Docker **sama persis** dengan [Tahap 3](./03-modsecurity-build.md) — tahap ini **murni nambah rule** di atas engine yang udah jadi, gak ada build/compose baru. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 4.
+> **Status:** 🚧 **LIVE (progres)** — SQLi & XSS custom rule + anomaly scoring (PL1 block) + paranoia gating (PL2 detection-only) kebukti 2026-10-23; path traversal + command injection `deny` langsung kebukti 2026-10-26; **brute force stateful per-IP** (content-aware, baca response) kebukti 2026-10-28; mekanisme promote PL2→block (fold `100950`/`100951`) udah ada (flip-test nyusul). Docker **sama persis** dengan [Tahap 3](./03-modsecurity-build.md) — tahap ini **murni nambah rule** di atas engine yang udah jadi, gak ada build/compose baru. Bagian dari [ModSecurity build from scratch](./README.md), nyakup roadmap Tahap 4.
 
 ## Tujuan
 
@@ -91,6 +91,8 @@ SecRule TX:INBOUND_ANOMALY_SCORE "@ge %{tx.inbound_anomaly_score_threshold}" \
 | `100900` init | Ember `pl1`/`pl2` + skor gabungan `tx.inbound_anomaly_score` di-nol-in; threshold inbound `5`; blocking `1`, detection `2` |
 | `100950`/`100951` fold | Jumlahin ember PL ke **skor gabungan**: PL1 selalu (`SecAction`), PL2 **cuma kalau `blocking ≥ 2`** (`SecRule` bersyarat) |
 | `100999` keputusan | Satu-satunya yang `deny` via scoring. Baca **skor gabungan** → naikin `blocking_paranoia_level=2` = promote PL2 jadi blocking **tanpa** nyentuh rule PL2 |
+
+> `main.conf` juga nampung directive buat **brute force** (response body access + collection per-IP + rule block `100998`) — dipisah ke **Step 5** biar bagian anomaly di sini tetap fokus.
 
 ### 2. Rule PL1 — produksi, nge-block (`rules/rules-sqli.conf`, `rules/rules-xss.conf`)
 
@@ -207,11 +209,78 @@ SecRule ARGS,ARGS_NAMES,REQUEST_HEADERS "@rx (?i)(?:[;|&\x60]|\$\(|\|\|)\s*(?:wh
 
 > **Catatan coverage:** header injection (mis. Shellshock via `User-Agent`) belum jadi fokus — DVWA exec vektornya `ARGS:ip`. `REQUEST_HEADERS` di-scan tapi presisi dijaga `(?!=)`. Kalau ada skenario serang-via-header, pertajam lagi (target header spesifik / command list lebih ketat).
 
-### 5. Kenapa dipisah per file + urutan load
+### 5. Rule stateful — brute force (content-aware, baca response)
+
+Kelas rule **paling beda**: bukan cuma liat request, tapi **baca response** (phase 4) dan **nyimpen state per-IP**. WAF gak bisa tau password bener/salah dari request (semua login attempt keliatan sama) — tapi bisa dari **response** DVWA: kalau body-nya ada *"Username and/or password incorrect."* berarti login **gagal**. Hitung gagal per-IP, kalau kebanyakan → block.
+
+Beda sama rate-limit nginx (Tahap 2) yang ngitung **semua** request: ini cuma ngitung **login yang gagal** (content-aware) — request sukses / halaman lain gak nambah counter.
+
+**Tambahan di `main.conf`** (izin baca response + collection per-IP + rule block):
+
+```
+SecResponseBodyAccess On
+SecResponseBodyMimeType text/html text/plain
+
+SecAction "id:100952,phase:1,pass,nolog,initcol:ip=%{remote_addr}"
+
+SecRule IP:OUTBOUND_FAILED_LOGIN "@ge 3" \
+    "id:100998,phase:2,deny,status:429,log, \
+    msg:'Outbound Failed Login Count Exceeded (count %{ip.outbound_failed_login})'"
+```
+
+| Directive | Fungsi |
+|-----------|--------|
+| `SecResponseBodyAccess On` + `MimeType` | Izinin ModSecurity baca **response body** (default off). Tanpa ini phase 4 buta |
+| `initcol:ip=%{remote_addr}` (`100952`) | Bikin collection **per source IP** → tiap IP punya counter sendiri (targeted, bukan palang buta) |
+| `100998` `IP:OUTBOUND_FAILED_LOGIN @ge 3` | Phase 2: counter IP ≥3 → `deny 429` **sebelum** request nyampe DVWA (lockout seluruh akses IP itu, ala fail2ban) |
+
+**Rule counter + reset** (`rules/rules-brute-force.conf`):
+
+```
+SecRule RESPONSE_BODY "@contains password incorrect" \
+    "id:100006,phase:4,pass,log,t:none,t:lowercase, \
+    setvar:ip.outbound_failed_login=+1, \
+    expirevar:ip.outbound_failed_login=300, \
+    chain"
+    SecRule REQUEST_URI "@contains /vulnerabilities/brute/" "t:none"
+
+SecRule RESPONSE_BODY "@contains welcome to the password protected area admin" \
+    "id:100007,phase:4,pass,nolog,t:none,t:lowercase, \
+    setvar:ip.outbound_failed_login=0, \
+    chain"
+    SecRule REQUEST_URI "@contains /vulnerabilities/brute/" "t:none"
+```
+
+| Bagian | Arti |
+|--------|------|
+| `RESPONSE_BODY @contains password incorrect` | Baca response (phase 4) — marker login **gagal** DVWA |
+| `phase:4` + `pass` | Jalan di fase response body; `pass` = cuma nyatet, gak block di sini (block-nya di `100998`, phase 2) |
+| `setvar:ip.outbound_failed_login=+1` | Naikin counter per-IP tiap gagal |
+| `expirevar:...=300` | Counter **ilang 300 detik** setelah gagal terakhir (sliding window) |
+| `chain` + `REQUEST_URI /brute/` | **Scope** — cuma hitung gagal di endpoint login brute, bukan kata "incorrect" di halaman lain |
+| `100007` reset (`=0`) | Kalau login **sukses** (*"welcome to the password protected area"*) → counter **di-nol-in** → user sah yang sempet salah gak kejebak |
+
+**`worker_processes 1`** (di `tahap-3-modsecurity.conf`): collection libmodsecurity v3 itu **in-memory per-worker** — kalau worker >1, counter kepecah antar-worker (request ke-2 bisa nyasar ke worker lain yang counter-nya masih 0). Dipaksa 1 worker biar counting konsisten. Batasan v3; buat lab 1 VM gak masalah.
+
+> **⚠️ Gotcha 1 — rule kedua di chain WAJIB punya action string.** Awalnya chain ini dipasang tanpa `"t:none"` di `SecRule REQUEST_URI` kedua:
+> ```
+>     chain"
+>     SecRule REQUEST_URI "@contains /vulnerabilities/brute/"   ← kosong, gak ada "..."
+> ```
+> Parser ModSecurity **nungguin action yang gak pernah datang**, lalu **nyebrang ke file berikutnya** (`rules-command-injection.conf`, tetangga alfabetis) dan nganggep isinya sebagai action → error **`Expecting an action`** nyasar ke file yang sebenernya **sehat**. Nyesatin: pesan error nunjuk **korban**, bukan **pelaku** (sempet ngutak-ngatik regex command-injection & path-traversal yang gak salah apa-apa). Fix: kasih `"t:none"` (action minimal) di tiap `SecRule` kedua. **Pelajaran: kalau parse error ModSecurity nunjuk file yang pas dites sendiri valid → curigai rule di file SEBELUMnya di urutan load.**
+
+> **⚠️ Gotcha 2 — compression bikin WAF buta ke response.** Script test (`python-requests`) default kirim `Accept-Encoding: gzip`, jadi DVWA balikin response **ter-gzip**. ModSecurity baca `RESPONSE_BODY` dalam bentuk **byte terkompresi** → "password incorrect" **gak ketemu** → counter gak naik → gak pernah block. (Di sisi client, requests auto-decompress → keliatan "ada" padahal WAF-nya buta — `marker: True` tapi gak kena.) **libmodsecurity v3 gak auto-decompress** response body. Fix di `tahap-3-modsecurity.conf`, dalam `location /`:
+> ```nginx
+> proxy_set_header Accept-Encoding "";
+> ```
+> WAF bilang ke DVWA "aku gak nerima kompresi" → upstream balikin **plaintext** → ModSecurity bisa inspeksi → counter jalan buat **semua client** (minta gzip atau nggak). Ini pola standar WAF yang inspeksi response body.
+
+### 6. Kenapa dipisah per file + urutan load
 
 `Include /etc/nginx/modsec/rules/*.conf` baca file **urut alfabetis**:
 
 ```
+rules-brute-force.conf       → 100006/100007 (stateful, phase 4)
 rules-command-injection.conf → 100005 (deny langsung)
 rules-path-traversal.conf    → 100004 (deny langsung)
 rules-sqli.conf              → 100001 (PL1)
@@ -219,15 +288,18 @@ rules-xss.conf               → 100002 (PL1)
 tune-rules.conf             → 100901 gerbang → 100003 (PL2) → END-PL2
 ```
 
-`r`/`c` < `t`, jadi `tune-rules.conf` **ke-load terakhir** → gerbang otomatis ada **setelah semua rule PL1 / deny**. Ini penting: gerbang `skipAfter:END-PL2` cuma boleh ngebungkus rule PL2. Kalau rule PL1/deny kejepit di antara gerbang & marker, dia ikut ke-skip pas `detection=1` — padahal mereka harus selalu jalan.
+`b` < `c`/`r` < `t`, jadi `tune-rules.conf` **ke-load terakhir** → gerbang otomatis ada **setelah semua rule PL1 / deny**. Ini penting: gerbang `skipAfter:END-PL2` cuma boleh ngebungkus rule PL2. Kalau rule PL1/deny kejepit di antara gerbang & marker, dia ikut ke-skip pas `detection=1` — padahal mereka harus selalu jalan.
+
+> Urutan ini juga yang bikin **Gotcha 1** (Step 5) nyesatin: `rules-brute-force.conf` load **paling awal**, jadi pas chain-nya "nggantung" (kurang action), yang kena getahnya `rules-command-injection.conf` (tetangga tepat di bawahnya) — bukan brute-force-nya sendiri.
 
 > Aturan: file rule PL1 / `deny` produksi = `rules-*.conf`. Rule PL2 yang dituning = dalam `tune-rules.conf`, di antara gerbang & `END-PL2`.
 
-### 6. Deploy (docker sama Tahap 3)
+### 7. Deploy (docker sama Tahap 3)
 
 ```bash
-# dari Mac — sync file rule yang berubah
-scp -r conf/nginx/modsec anang@10.10.10.5:/data/waf/scratch/conf/nginx/
+# dari Mac — sync SELURUH conf/nginx (brute force ngubah tahap-3-modsecurity.conf
+# juga: worker_processes 1 + proxy_set_header Accept-Encoding "")
+scp -r conf anang@10.10.10.5:/data/waf/scratch/
 
 # di VM
 cd /data/waf/scratch
@@ -292,6 +364,26 @@ DVWA Command Injection (`exec`, form POST field `ip`):
 
 Dua bukti penting: (1) payload kena di **`ARGS:ip`** walau dikirim **POST** → `ARGS` nyakup body form; (2) **ping legit gak keblok** → rule presisi (cuma nendang separator+command, bukan IP biasa).
 
+### 5. Brute force — stateful per-IP (live 2026-10-28)
+
+DVWA Brute Force, login salah berulang (`admin`/`salah`) dari `192.168.43.193` (threshold `@ge 3`):
+
+| Request | Hasil | Catatan |
+|---------|-------|---------|
+| req 1–3 | **200** | login gagal, counter naik 1→2→3 (response bawa `password incorrect`) |
+| req 4+ | **429** | `100998` deny — `IP:...OUTBOUND_FAILED_LOGIN ≥ 3` |
+
+![Brute force → 429 setelah 3 gagal](../asset/modsecurity-scratch/tahap-4-brute-force-429.png)
+
+Dari `error.log` + audit JSON:
+- `100998` match `IP:192.168.43.193::::OUTBOUND_FAILED_LOGIN (Value: 3)` → **collection per-IP jalan**, counter persist lintas request (v3 + `worker_processes 1` kebukti bisa).
+- `100006` match `REQUEST_URI /vulnerabilities/brute/` (audit) → **chain scope** aktif.
+- Request yang keblok tetap bawa `Accept-Encoding: gzip` + `User-Agent: python-requests` → tetap kena → **fix compression (Gotcha 2) sukses**.
+
+Dua bug sepanjang jalan (lihat **Gotcha 1 & 2** di Step 5): chain tanpa `t:none` (parse error nyasar ke file tetangga), dan response gzip bikin WAF buta. Dua-duanya kebukti + fixed, baru 429 muncul.
+
+Reset counter: `expirevar` auto-bersih ±300 detik setelah gagal terakhir, atau `docker compose restart` (collection in-memory → balik 0 seketika).
+
 ### Ringkasan bukti
 
 | | PL1 (`@detectXSS`) | PL2 (`@rx` taglist) |
@@ -309,4 +401,4 @@ Dua bukti penting: (1) payload kena di **`ARGS:ip`** walau dikirim **POST** → 
 - **Rule high-confidence (direct `deny`)**: ✅ path traversal (`100004`) + command injection (`100005`) live — sekali match = `deny` langsung tanpa scoring. Sensitive path/command lain bisa nyusul.
 - **Header injection** (mis. Shellshock via `User-Agent`): `REQUEST_HEADERS` di-scan di rule CI (presisi dijaga `(?!=)`), tapi belum ada skenario lab khusus — pertajam kalau diperluin.
 - **Paranoia gating penuh (PL3–4)**: tiap level di atas PL1 butuh gerbang + marker sendiri (`@lt N`). Sekarang baru PL2.
-- **Outbound**: `SecResponseBodyAccess` + rule outbound belum ada (threshold di-set tapi belum dipakai).
+- **Brute force (stateful, content-aware)**: ✅ live — baca `RESPONSE_BODY` (phase 4) buat hitung login gagal per-IP (`100006`), reset pas sukses (`100007`), block di `100998`. Batasan: (1) collection v3 **in-memory per-worker** → butuh `worker_processes 1`, **reset ke 0 tiap container restart**; (2) WAF **wajib strip compression** (`Accept-Encoding ""`) atau response-body rule buta ke response gzip; (3) berbasis IP → beberapa attacker di belakang satu NAT **berbagi counter**.

@@ -73,6 +73,7 @@ modsecurity-scratch/
         └── modsec/
             ├── main.conf         ← engine + init + keputusan (Tahap 3+)
             └── rules/            ← SecRule custom (Tahap 4)
+                ├── rules-brute-force.conf ← stateful content-aware (phase 4, per-IP)
                 ├── rules-command-injection.conf ← direct deny (shell syntax)
                 ├── rules-path-traversal.conf ← direct deny (traversal/LFI)
                 ├── rules-sqli.conf   ← PL1 @detectSQLi (block)
