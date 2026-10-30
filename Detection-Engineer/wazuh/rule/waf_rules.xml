@@ -1,0 +1,38 @@
+<group name="modsecurity,waf,">
+
+    <rule id="100700" level="0">
+      <decoded_as>json</decoded_as>
+      <field name="transaction.producer.modsecurity">\.+</field>
+      <description>ModSecurity: audit event</description>
+    </rule>
+
+    <rule id="100701" level="7">
+      <if_sid>100700</if_sid>
+      <field name="transaction.is_interrupted">true</field>
+      <description>WAF: request diblokir ModSecurity ($(transaction.request.method) $(transaction.request.uri)) dari $(transaction.client_ip)</description>
+      <mitre><id>T1190</id></mitre>
+      <group>attack,blocked,</group>
+    </rule>
+
+    <rule id="100702" level="10">
+      <if_sid>100701</if_sid>
+      <field name="transaction.messages">attack-command-injection</field>
+      <description>WAF: Command Injection diblokir dari $(transaction.client_ip)</description>
+      <mitre><id>T1190</id></mitre>
+    </rule>
+
+    <rule id="100703" level="10">
+      <if_sid>100701</if_sid>
+      <field name="transaction.messages">attack-sqli</field>
+      <description>WAF: SQL Injection diblokir dari $(transaction.client_ip)</description>
+      <mitre><id>T1190</id></mitre>
+    </rule>
+
+    <rule id="100704" level="10">
+      <if_sid>100701</if_sid>
+      <field name="transaction.messages">attack-xss</field>
+      <description>WAF: XSS diblokir dari $(transaction.client_ip)</description>
+      <mitre><id>T1190</id></mitre>
+    </rule>
+
+  </group>
