@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>403 — Access Denied</title>
+    <style>
+        :root {
+            --bg: #0b0f1a;
+            --panel: #121826;
+            --border: #1f2a3d;
+            --accent: #ff4d4d;
+            --accent-dim: #7a2b2b;
+            --text: #e6edf6;
+            --muted: #8a97ab;
+            --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body { height: 100%; }
+
+        body {
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            background:
+                radial-gradient(900px 500px at 50% -10%, rgba(255, 77, 77, 0.10), transparent 60%),
+                var(--bg);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 24px;
+            line-height: 1.6;
+        }
+
+        .card {
+            width: 100%;
+            max-width: 560px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 40px 36px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        }
+
+        .shield {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 14px;
+            background: rgba(255, 77, 77, 0.12);
+            border: 1px solid var(--accent-dim);
+        }
+
+        .shield svg { width: 34px; height: 34px; stroke: var(--accent); }
+
+        .code {
+            font-family: var(--mono);
+            font-size: 13px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 14px;
+            letter-spacing: -0.3px;
+        }
+
+        p {
+            color: var(--muted);
+            font-size: 15px;
+            margin-bottom: 14px;
+        }
+
+        .meta {
+            margin-top: 28px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border);
+            font-family: var(--mono);
+            font-size: 12.5px;
+            color: var(--muted);
+        }
+
+        .meta .row {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 4px 0;
+        }
+
+        .meta .row span:first-child { color: #5f6b7e; }
+        .meta .row span:last-child { color: var(--text); text-align: right; word-break: break-all; }
+
+        .foot {
+            margin-top: 24px;
+            font-size: 12px;
+            color: #566072;
+        }
+
+        @media (max-width: 480px) {
+            .card { padding: 32px 24px; }
+            h1 { font-size: 23px; }
+        }
+
+        @media (prefers-color-scheme: light) {
+            :root:not([data-theme="dark"]) {
+                --bg: #f4f6fa;
+                --panel: #ffffff;
+                --border: #e2e8f0;
+                --text: #1a2233;
+                --muted: #5a6677;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="card">
+        <div class="shield" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                <line x1="9" y1="12" x2="15" y2="12"/>
+            </svg>
+        </div>
+
+        <div class="code">HTTP 403 · Forbidden</div>
+        <h1>Request diblokir</h1>
+        <p>
+            Permintaan kamu ditolak oleh Web Application Firewall. Request ini terdeteksi
+            mengandung pola yang mencurigakan atau melanggar kebijakan keamanan.
+        </p>
+        <p>
+            Kalau kamu yakin ini keliru, hubungi administrator dan sertakan reference ID di bawah.
+        </p>
+
+        <div class="meta">
+            <div class="row"><span>Status</span><span>403 Forbidden</span></div>
+            <div class="row"><span>Reference</span><span>WAF-BLOCK</span></div>
+            <div class="row"><span>Protected by</span><span>ModSecurity + NGINX</span></div>
+        </div>
+
+        <div class="foot">Blue Team SOC Labs — WAF</div>
+    </main>
+</body>
+</html>

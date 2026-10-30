@@ -10,3 +10,4 @@ services:
     volumes:
       - ./conf/nginx/modsec/main.conf:/etc/nginx/modsec/main.conf:ro
       - ./conf/nginx/modsec/rules:/etc/nginx/modsec/rules:ro
+      - ./conf/nginx/html/403.html:/etc/nginx/html/403.html:ro
