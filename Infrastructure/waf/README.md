@@ -8,7 +8,7 @@ Bangun **WAF sebagai reverse proxy di depan DVWA**, dengan beberapa stack WAF di
 |-------|--------|----------|--------|
 | **ModSecurity + OWASP CRS** (image resmi) | [`modsecurity-crs/`](./modsecurity-crs/README.md) | Image `owasp/modsecurity-crs:nginx`, siap pakai, engine regex/signature + anomaly scoring | ✅ LIVE end-to-end |
 | **ModSecurity from scratch** | [`modsecurity-scratch/`](./modsecurity-scratch/README.md) | Nginx + libmodsecurity v3 + connector + rules dirakit dan di-compile sendiri, buat paham tiap komponen | 🚧 Dikerjain |
-| **SafeLine** | `safeline/` | WAF managed dengan dashboard, engine **semantic analysis** | 📝 Blueprint |
+| **SafeLine** | [`safeline/`](./safeline/README.md) | WAF managed dengan dashboard, engine **semantic analysis** | 📝 Blueprint |
 
 Angle lab ini **blue team / detection + response**. Web-Server udah matang di sisi **detection** (network via Suricata/pfSense + endpoint via agent/auditd/FIM/CSP), jadi WAF ini step pertama masuk ranah **response**. Yang dinilai dua hal:
 
@@ -86,7 +86,7 @@ Struktur folder kerja di VM (runtime di host, bukan di repo):
 /data/waf/
 ├── modsec-crs/     ← stack ModSecurity + CRS (image resmi)
 └── scratch/        ← stack ModSecurity from scratch
-/data/safeline/     ← stack SafeLine
+/data/waf/safeline/     ← stack SafeLine
 ```
 
 ---
@@ -104,7 +104,7 @@ cd /data/waf/scratch     && docker compose up -d    # stack yang mau dites
 |-------|----------------|
 | ModSecurity + CRS | `/data/waf/modsec-crs` |
 | ModSecurity scratch | `/data/waf/scratch` |
-| SafeLine | `/data/safeline` |
+| SafeLine | `/data/waf/safeline` |
 
 **Cek siapa yang pegang port:**
 ```bash
