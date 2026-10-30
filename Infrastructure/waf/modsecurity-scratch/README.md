@@ -40,12 +40,11 @@ Tiap tahap punya file sendiri dengan format Tujuan → Prerequisites → Step-by
 | 2 | [`02-nginx-native-filter.md`](./02-nginx-native-filter.md) | **Rule native nginx** (tanpa ModSecurity) + log ke file | `map`, `if`/`return`, `location`, `limit_req`, `log_format`, dan **batasan** WAF berbasis regex mentah | ✅ |
 | 3 | [`03-modsecurity-build.md`](./03-modsecurity-build.md) | **Compile libmodsecurity v3** + **connector** `ModSecurity-nginx` (`.so`, versi nginx harus sama persis) | Dependency engine (PCRE2, libxml2, yajl, curl, dll), `load_module` | ✅ |
 | 4 | [`04-modsecurity-basic-rules.md`](./04-modsecurity-basic-rules.md) | **SecRule tulisan sendiri** tanpa CRS + **anomaly scoring** + **paranoia gating** (PL1 block vs PL2 shadow) | variable / operator (`@detectSQLi`,`@detectXSS`,`@rx`) / transformation / action, `pass`/`block`/`deny`, `skipAfter`/`SecMarker`, ember skor per-PL | 🚧 |
-| 5 | `05-modsecurity-owasp-crs.md` | **Pasang OWASP CRS manual** _(opsional)_ | `crs-setup.conf`, urutan include, anomaly scoring, paranoia | ⏸️ Diputusin nanti |
-| 6 | `06-wazuh-integration.md` | **Log → Wazuh** | `<localfile>` + ingest ke agent `waf` | ⏳ |
+| 5 | `05-wazuh-integration.md` | **Forward `modsec_audit.log` → Wazuh** lewat agent di VM `waf` + **custom rule** deteksi block WAF (`Detection-Engineer/wazuh/rule/waf_rules.xml`) | `<localfile>` JSON decoder bawaan, rule by `tags` (reusable), base→child, MITRE `T1190` | 🚧 |
 
 File yang belum ada linknya dibikin pas tahapnya mulai dikerjain.
 
-Tahap 5 **opsional**. Stack ini bisa tetap pakai SecRule tulisan sendiri tanpa CRS, karena perbandingan dengan CRS udah ada di stack [`../modsecurity-crs/`](../modsecurity-crs/README.md). Tahap 6 (Wazuh) tetap jalan dengan atau tanpa Tahap 5.
+Stack ini pakai SecRule tulisan sendiri — perbandingan dengan OWASP CRS udah ada di stack [`../modsecurity-crs/`](../modsecurity-crs/README.md), jadi gak diulang di sini. Tahap 5 (Wazuh): yang di-forward cuma `modsec_audit.log` (JSON), ditambahin `<localfile>` di sisi agent VM `waf`, parsing pakai JSON decoder bawaan (gak perlu decoder custom), rule-nya nembak field hasil decode.
 
 Dockerfile pakai **multi-stage build**: stage builder buat compile, stage final cuma berisi nginx + module + library runtime. Versi tiap komponen (nginx, ModSecurity, connector, CRS) dikunci dan dicatat di sini.
 
