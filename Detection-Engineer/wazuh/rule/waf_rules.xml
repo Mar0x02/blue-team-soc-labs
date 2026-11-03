@@ -36,3 +36,30 @@
     </rule>
 
   </group>
+
+<group name="sentinel-waf,waf,">
+
+    <rule id="100708" level="0">
+      <decoded_as>sentinel-waf</decoded_as>
+      <description>Sentinel WAF: event ModSecurity ($(http_method) $(url)) dari $(srcip)</description>
+    </rule>
+
+    <rule id="100709" level="12">
+      <if_sid>100708</if_sid>
+      <field name="waf_action">blocked</field>
+      <field name="severity">CRITICAL</field>
+      <description>WAF: request diblokir Sentinel WAF ($(http_method) $(url)) dari $(srcip) dengan $(severity) category $(category)</description>
+      <mitre><id>T1190</id></mitre>
+      <group>attack,blocked,</group>
+    </rule>
+    
+    <rule id="100710" level="9">
+      <if_sid>100708</if_sid>
+      <field name="waf_action">blocked</field>
+      <field name="severity">ERROR</field>
+      <description>WAF: request diblokir Sentinel WAF ($(http_method) $(url)) dari $(srcip) dengan $(severity) category $(category)</description>
+      <mitre><id>T1190</id></mitre>
+      <group>attack,blocked,</group>
+    </rule>
+
+  </group>

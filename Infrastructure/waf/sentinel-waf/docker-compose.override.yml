@@ -1,0 +1,4 @@
+services:
+  waf-engine:
+    ports:
+      - "80:80"

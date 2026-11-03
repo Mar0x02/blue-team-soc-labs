@@ -1,0 +1,5 @@
+<decoder name="sentinel-waf">
+  <prematch>waf</prematch>
+  <regex offset="after_prematch" type="pcre2">\[(\S+)\] client=(\S+) host=(\S+) method=(\S+) uri=(\S+) status=(\d+) user_agent="([^*]+)" severity=(\S+) category=(\S+) rules=(\S+) matched_data="([^"]+)"</regex>
+  <order>waf_action, srcip, dstip, http_method, url, status, user_agent, severity, category, rule_ids, matched_data</order>
+</decoder>
