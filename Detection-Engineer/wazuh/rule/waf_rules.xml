@@ -37,6 +37,31 @@
 
   </group>
 
+<group name="safeline,waf,">
+
+    <rule id="100705" level="0">
+      <decoded_as>json</decoded_as>
+      <field name="safeline.event_id">\.+</field>
+      <description>SafeLine: attack event</description>
+    </rule>
+
+    <rule id="100706" level="7">
+      <if_sid>100705</if_sid>
+      <field name="safeline.action">^1$</field>
+      <description>WAF: request diblokir SafeLine ($(safeline.url_path)) dari $(safeline.src_ip)</description>
+      <mitre><id>T1190</id></mitre>
+      <group>attack,blocked,</group>
+    </rule>
+
+    <rule id="100707" level="10">
+      <if_sid>100706</if_sid>
+      <field name="safeline.rule_id">^m_sqli$</field>
+      <description>WAF: SQL Injection diblokir SafeLine dari $(safeline.src_ip)</description>
+      <mitre><id>T1190</id></mitre>
+    </rule>
+
+  </group>
+
 <group name="sentinel-waf,waf,">
 
     <rule id="100708" level="0">
