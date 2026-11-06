@@ -1,0 +1,12 @@
+[Unit]
+Description=SafeLine attack log exporter for Wazuh
+After=docker.service
+Wants=docker.service
+
+[Service]
+ExecStart=/usr/local/bin/safeline-log-exporter.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
