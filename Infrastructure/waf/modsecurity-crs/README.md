@@ -117,6 +117,8 @@ Audit log JSON → Wazuh auto-extract field-nya (`client_ip`, `uri`, messages + 
 curl -I http://<IP-WAN-pfSense>/
 ```
 
+![Login DVWA lewat reverse proxy ModSecurity+CRS](../asset/modsecurity-crs/modsecurity-crs-dvwa-login-via-proxy.png)
+
 **Block serangan:**
 ```bash
 curl "http://<IP-WAN-pfSense>/?id=1' OR '1'='1"     # → 403 Forbidden
@@ -134,6 +136,8 @@ grep -o '"ruleId":"[0-9]*"' /data/waf/modsec-crs/logs/audit.log | sort | uniq -c
 - Serangan external dari M1 (`192.168.43.193`) → pfSense → WAF → **403** buat GET (query URL) maupun POST (form DVWA)
 - `client_ip` di audit log = **IP attacker asli** (`192.168.43.193`)
 - Event ModSec nyampe **Wazuh archives**. Belum jadi **alert**, karena belum ada rule Wazuh yang match (dikerjain di tahap custom rule)
+
+✅ Re-confirmed 2026-11-06: proxy ke DVWA masih jalan normal (screenshot di atas). **Alert Wazuh CONFIRMED juga** — command injection `;whoami` ke `/vulnerabilities/exec/` diblok CRS (403, rule RCE family + anomaly) dan muncul jadi alert `100701` (level 7, MITRE T1190) di Wazuh Dashboard, `agent.name: waf`. Pipeline exporter → agent → rule → alert LIVE end-to-end buat stack ini juga. **Tapi ada gap ketemu**: alert cuma naik sampai rule generik `100701`, belum ke rule spesifik `100702` (command injection) karena mismatch tag CRS (`attack-rce`) vs string yang dicari rule (`attack-command-injection`) — detail lengkap + JSON alert di writeup lab: [`Labs/waf/modsecurity-crs/README.md`](../../../Labs/waf/modsecurity-crs/README.md).
 
 ---
 

@@ -7,9 +7,9 @@ Bangun **WAF sebagai reverse proxy di depan DVWA**, dengan beberapa stack WAF di
 | Stack | Folder | Karakter | Status |
 |-------|--------|----------|--------|
 | **ModSecurity + OWASP CRS** (image resmi) | [`modsecurity-crs/`](./modsecurity-crs/README.md) | Image `owasp/modsecurity-crs:nginx`, siap pakai, engine regex/signature + anomaly scoring | ✅ LIVE end-to-end |
-| **ModSecurity from scratch** | [`modsecurity-scratch/`](./modsecurity-scratch/README.md) | Nginx + libmodsecurity v3 + connector + rules dirakit dan di-compile sendiri, buat paham tiap komponen | 🚧 Dikerjain |
-| **SafeLine** | [`safeline/`](./safeline/README.md) | WAF managed dengan dashboard, engine **semantic analysis** | 🚧 Dikerjain |
-| **Sentinel WAF** | [`sentinel-waf/`](./sentinel-waf/README.md) | Dashboard manajemen buatan sendiri (React+FastAPI+Postgres) di atas engine **ModSecurity v3 + CRS** | 🚧 Belum dimulai |
+| **ModSecurity from scratch** | [`modsecurity-scratch/`](./modsecurity-scratch/README.md) | Nginx + libmodsecurity v3 + connector + rules dirakit dan di-compile sendiri, buat paham tiap komponen | ✅ LIVE end-to-end |
+| **SafeLine** | [`safeline/`](./safeline/README.md) | WAF managed dengan dashboard, engine **semantic analysis** | 🚧 Dikerjain (lab testing, lanjut kapan-kapan) |
+| **Sentinel WAF** | [`sentinel-waf/`](./sentinel-waf/README.md) | Dashboard manajemen buatan sendiri (React+FastAPI+Postgres) di atas engine **ModSecurity v3 + CRS** | ✅ LIVE end-to-end |
 
 Angle lab ini **blue team / detection + response**. Web-Server udah matang di sisi **detection** (network via Suricata/pfSense + endpoint via agent/auditd/FIM/CSP), jadi WAF ini step pertama masuk ranah **response**. Yang dinilai dua hal:
 
@@ -17,6 +17,27 @@ Angle lab ini **blue team / detection + response**. Web-Server udah matang di si
 2. **Detection**: apa yang tiap WAF **detect vs lewatkan**, dan gimana **log-nya masuk Wazuh** jadi alert buat analis.
 
 Ini bagian dari progres response bertahap: **WAF → network (Suricata IPS) → firewall (pfSense block / active-response)**. Writeup lab-nya ada di [`../../Labs/waf/`](../../Labs/waf/).
+
+---
+
+## 🧠 Kesimpulan — Perbandingan 4 Stack
+
+Setelah nyoba keempatnya, WAF sebagai kategori tool ini **kebukti nyata guna dipake**, bukan cuma latihan lab doang. Tiap stack punya karakter beban kerja yang beda, dan itu yang nentuin mana yang cocok dipake di skenario operasional mana.
+
+| Aspek | ModSecurity (CRS & scratch) | SafeLine | Sentinel WAF |
+|---|---|---|---|
+| Cara config | Manual, CLI/file (`SecRule` syntax) | GUI dashboard | GUI dashboard (di atas engine ModSecurity) |
+| Beban kerja awal | Sedang–tinggi | Tinggi (install + setup dashboard) | Tinggi (install + dev sendiri) |
+| Beban kerja jangka panjang | **Tetap tinggi** — tiap rule/tuning baru ditulis manual | Rendah — tinggal klik di dashboard | Rendah — sama kayak SafeLine |
+| Rawan kesalahan | Tinggi (manual CLI, gampang typo/salah regex) | Rendah | Rendah |
+| Batasan fitur | Gak ada (full akses config) | Fitur gratis dibatesin (misal Syslog export berbayar) | Gak ada — kontrol penuh, source sendiri |
+| Biaya | Gratis (open source) | Free tier terbatas | Gratis (repo sendiri) |
+
+**Per stack:**
+
+- **ModSecurity (CRS & scratch)** — dua-duanya reliable soal deteksi (SecRule + OWASP CRS udah teruji), tapi beban kerjanya **konsisten besar dari awal sampai akhir** karena semuanya manual lewat CLI/config file. Simpel secara konsep, tapi rawan kesalahan ketik/regex, dan bisa dibilang mumet kalau dikerjain sendirian tanpa automasi.
+- **SafeLine** — kebalikannya: kerja keras cuma di awal (install, setup dashboard, daftar site), abis itu manajemen harian jauh lebih ringan berkat GUI — beban kerja kita berkurang drastis dibanding ModSecurity. Trade-off-nya fitur gratisnya dibatesin — udah kerasa sendiri di lab ini (Syslog export ke SIEM itu fitur berbayar, lihat `safeline/README.md`).
+- **Sentinel WAF** — dari sisi orang yang makai, pengalamannya mirip SafeLine: GUI di atas engine ModSecurity, bukan nulis `SecRule` manual. Tapi karena ini dashboard buatan sendiri, maintenance-nya justru **lebih enak** daripada SafeLine — gak ada batasan fitur berbayar, apapun yang mau ditambah tinggal develop sendiri.
 
 ---
 
