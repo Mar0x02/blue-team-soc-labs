@@ -1,0 +1,23 @@
+detect:
+    event: NEW_PROCESS
+    op: and
+    rules:
+        - op: or
+          rules:
+            - op: ends with
+              path: event/PARENT/FILE_PATH
+              value: php-fpm
+            - op: ends with
+              path: event/PARENT/FILE_PATH
+              value: apache2
+        - op: or
+          rules:
+            - op: ends with
+              path: event/FILE_PATH
+              value: whoami
+            - op: ends with
+              path: event/FILE_PATH
+              value: id
+respond:
+  - action: report
+    name: Linux Suspicious Shell Execution
