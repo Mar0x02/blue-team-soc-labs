@@ -1,6 +1,6 @@
 # LimaCharlie EDR Full Kill-Chain Validation (Supply Chain to C2)
 
-> **Status: in progress.** Lab ini memvalidasi visibilitas LimaCharlie (EDR) terhadap rantai serangan end-to-end, dari initial access via supply chain compromise hingga command and control menggunakan MITRE Caldera sebagai adversary emulation.
+> **Status: selesai, 20 November 2026.** Lab ini memvalidasi visibilitas LimaCharlie (EDR) terhadap rantai serangan end-to-end, dari initial access via supply chain compromise hingga command and control menggunakan MITRE Caldera sebagai adversary emulation.
 
 ---
 
@@ -65,7 +65,7 @@ Karena dieksekusi langsung dengan `sudo` oleh admin (bukan lewat proses web serv
 
 ### 1.3 Verifikasi Deteksi EDR (LimaCharlie)
 
-*(menyusul — verifikasi Timeline LimaCharlie buat kronologi proses `git`/`bash setup.sh`/`splunkd` di atas, ditunda ke Fase 5 konsisten sama pola lab sebelumnya)*
+**Hasil: parsial.** LimaCharlie **gak capture** command line eksekusi `setup.sh` itu sendiri secara langsung (Detections-nya baru mulai dari titik `sandcat.go` udah jalan, Fase 5.1) — gap ini ketutup lewat cross-check ke Wazuh (`sudo` rule `5402`, Fase 5.2), bukan dari LimaCharlie. Ada juga 5 LimaCharlie detection di window `07:11:39`-`07:19:25` yang gak pernah dibuka detailnya satu-satu buat mastiin ada hubungannya atau noise (dicatat di Fase 5.1 catatan #2 + **Batasan**). Lihat Fase 5.1 & 5.2 buat kronologi lengkap yang beneran tervalidasi.
 
 **Ekspektasi:**
 1. Event `NEW_PROCESS` untuk `git` dan `bash` (`setup.sh`).
@@ -317,7 +317,7 @@ EOF
 
 # Verifikasi
 
-*(diisi progresif — screenshot + hasil tiap fase ditaruh di `asset/`, dirujuk di sini setelah eksekusi)*
+Verifikasi tiap fase ditulis inline langsung di **Step-by-Step** masing-masing (screenshot + hasil + cross-check ke JSON operation report Caldera dan log Wazuh), bukan diulang terpisah di sini. Ringkasan status lengkap ada di tabel **Activity Coverage** di atas — seluruh 5 fase **✅ Done**, termasuk cross-tool verification EDR (LimaCharlie, 41 detections) + SIEM (Wazuh, 64 hits) di Fase 5.1-5.2 dan response manual di Fase 5.4.
 
 ---
 
