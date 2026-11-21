@@ -1,6 +1,6 @@
 # 🛰️ EDR — LimaCharlie
 
-> ✅ **STATUS: SENSOR LIVE di Web-Server.** Agent LimaCharlie jalan sebagai service Linux (`limacharlie.service`) di VM Web-Server (`10.10.10.10`, Ubuntu + DVWA). Baru sampai tahap sensor nongol online di dashboard — belum ada telemetry/deteksi yang dianalisis (lanjutan di sesi berikutnya).
+> ✅ **STATUS: SENSOR LIVE + D&R rules + FIM dikonfigurasi, 21 November 2026.** Agent LimaCharlie jalan sebagai service Linux (`limacharlie.service`) di VM Web-Server (`10.10.10.10`, Ubuntu + DVWA). Full kill-chain validation udah selesai (lihat `Labs/edr/limacharlie/Detection/`), custom D&R rule (detection + response) dan File & Registry Integrity (FIM) udah dikonfigurasi di dashboard.
 
 ## Tujuan
 
@@ -61,6 +61,18 @@ limacharlie.service    loaded active running LimaCharlie Agent
 
 ![Service limacharlie.service active running di Web-Server](../asset/limacharlie/limacharlie-agent-service-running.png)
 
+### 6. Setup File & Registry Integrity (FIM)
+
+Dashboard LimaCharlie: **Sensors → Automation → File/Reg Integrity**. Fitur ini monitor path file/registry tertentu buat perubahan — tiap match pattern-nya surface sebagai event `FIM_HIT`. Dibuat 2 monitoring rule (platform Linux):
+
+- **`service-&-cron`** — pattern `/etc/systemd/system/*`, `/etc/cron.d/*`, `/var/spool/cron/crontabs/*`. Nutup jalur persistence yang sama kayak root cause lab kill-chain (`splunkd.service` dibuat di `/etc/systemd/system/`, lihat `Labs/edr/limacharlie/Detection/`).
+- **`ssh-keys`** — pattern `/root/.ssh/authorized_keys`. Deteksi penambahan SSH key buat persistence/backdoor access.
+
+![New Monitoring Rule — service-&-cron, 3 pattern systemd/cron, platform Linux](../asset/limacharlie/limacharlie-fim-new-monitoring-rule-service-cron.png)
+![File & Registry Integrity — 2 monitoring rule aktif: service-&-cron, ssh-keys](../asset/limacharlie/limacharlie-fim-rules-list.png)
+
+> **Gotcha:** `FIM_HIT` default cuma nongol di **Timeline** (raw event), **bukan** di tab **Detections**. Biar tiap FIM hit otomatis jadi entry Detection, dibuat D&R rule tambahan `fim-detection-parent.yml` (`Detection-Engineer/sigma-lima-charlie/`) — detect `event: FIM_HIT` lalu `action: report`.
+
 ---
 
 ## Verifikasi
@@ -82,5 +94,6 @@ limacharlie.service    loaded active running LimaCharlie Agent
 
 - **Datacenter gak ada pilihan Asia/Indonesia** — dipilih `australia-1`, paling deket yang tersedia. Belum dicek dampaknya ke latensi telemetry.
 - **Sensor count bisa menyesatkan**: dashboard nunjukin "5 sensors" tapi yang beneran endpoint fisik cuma 1 (`web-server`). 4 lainnya itu sensor virtual dari Extension (`ext-*`, tag `lc:system`) — bawaan platform, bukan hasil install manual.
-- **Baru sampai "service jalan"** — belum masuk ke konfigurasi Detection & Response (D&R rules), belum ada telemetry yang dianalisis/dites. Lanjutan ada di `Labs/edr/limacharlie/` (belum dibuat).
+- **Full kill-chain validation udah dites** (supply chain → C2, Caldera sebagai adversary emulation) — lihat `Labs/edr/limacharlie/Detection/`.
+- **Custom D&R rule** di `Detection-Engineer/sigma-lima-charlie/` — selain FIM (lihat langkah 6), ada juga rule response (kill process) buat pola umum serangan Linux: curl/wget → base64/gzip decode → pipe shell, eksekusi script dari `/tmp`, dan `sudo`/`dash` dipanggil dari parent di `/tmp`.
 - **Rencana endpoint berikutnya**: Windows client (Win7) — belum dieksekusi, DVWA/Web-Server jadi target pertama.
