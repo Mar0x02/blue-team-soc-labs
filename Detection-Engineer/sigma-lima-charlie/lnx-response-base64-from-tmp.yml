@@ -1,0 +1,58 @@
+detect:
+    event: NEW_PROCESS
+    op: and
+    rules:
+        - op: starts with
+          path: event/FILE_PATH
+          value: /tmp
+        
+        - op: or
+          rules:
+            - op: contains
+              path: event/COMMAND_LINE
+              value: base64 -d
+            - op: contains
+              path: event/COMMAND_LINE
+              value: base64 --decode
+            - op: contains
+              path: event/COMMAND_LINE
+              value: gzip -d
+            - op: contains
+              path: event/COMMAND_LINE
+              value: gzip --decompress
+            - op: contains
+              path: event/COMMAND_LINE
+              value: gzip -c
+            - op: contains
+              path: event/COMMAND_LINE
+              value: gzip --stdout
+            - op: contains
+              path: event/COMMAND_LINE
+              value: gzip -dc
+        
+        - op: or
+          rules:
+            - op: contains
+              path: event/COMMAND_LINE
+              value: "| bash"
+            - op: contains
+              path: event/COMMAND_LINE
+              value: "| sh"
+            - op: contains
+              path: event/COMMAND_LINE
+              value: "| dash"
+            - op: contains
+              path: event/COMMAND_LINE
+              value: "| python"
+            - op: contains
+              path: event/COMMAND_LINE
+              value: "| perl"
+respond:
+  - action: report
+    name: "CRITICAL: Base64 Decode + Execute Pattern Detected from TMP"
+    priority: 5  # Highest priority
+  - action: task
+    command: os_kill_process --pid {{ .event.PROCESS_ID }}
+  - action: add tag
+    tag: base64_payload_execution_from_tmp
+    ttl: 86400
