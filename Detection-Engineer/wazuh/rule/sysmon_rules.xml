@@ -116,4 +116,43 @@
         </mitre>
         <group>execution,user_execution,</group>
     </rule>
+    <rule id="100611" level="8">
+        <if_sid>61603</if_sid>
+        <field name="win.system.eventID" type="pcre2">^1$</field>
+        <field name="win.eventdata.image" type="pcre2">(?i)\\(Temp|AppData)\\.*\.exe$</field>
+        <description>Sysmon: Executable from Temp/AppData - $(win.eventdata.image)</description>
+        <mitre><id>T1204.002</id></mitre>
+        <group>execution,payload_exec,</group>
+    </rule>
+    <rule id="100612" level="10">
+        <if_sid>100611</if_sid><field name="win.eventdata.parentImage" type="pcre2">(?i)\\powershell\.exe$</field>
+        <description>Sysmon: Executable from Temp/AppData spawned by PowerShell - $(win.eventdata.image)</description>
+        <mitre><id>T1204.002</id><id>T1059.001</id></mitre>
+        <group>execution,payload_exec,</group>
+    </rule>
+    <rule id="100613" level="11">
+        <if_sid>61605, 92101</if_sid>
+        <field name="win.system.eventID" type="pcre2">^3$</field>
+        <field name="win.eventdata.image" type="pcre2">(?i)\\(Temp|AppData)\\.*\.exe$</field>
+        <field name="win.eventdata.initiated" type="pcre2">^true$</field>
+        <description>Sysmon: Outbound C2 connection from Temp/AppData exe to $(win.eventdata.destinationIp):$(win.eventdata.destinationPort) - $(win.eventdata.image)</description>
+        <mitre><id>T1071</id><id>T1095</id></mitre>
+        <group>command_and_control,c2_callback,</group>
+    </rule>
+    <rule id="100614" level="14" timeframe="120">
+        <if_sid>100613</if_sid>
+        <if_matched_sid>100612</if_matched_sid>
+        <same_field>win.eventdata.processGuid</same_field>
+        <description>CORRELATION: Same process executed from Temp/AppData AND opened C2 connection - $(win.eventdata.image)</description>
+        <mitre><id>T1071</id><id>T1095</id><id>T1204.002</id></mitre>
+        <group>command_and_control,c2_callback,high_confidence,</group>
+    </rule>
+    <rule id="100615" level="14" timeframe="120">
+        <if_sid>100613</if_sid>
+        <if_matched_sid>100611</if_matched_sid>
+        <same_field>win.eventdata.processGuid</same_field>
+        <description>CORRELATION: Same process executed from Temp/AppData AND opened C2 connection - $(win.eventdata.image)</description>
+        <mitre><id>T1071</id><id>T1095</id><id>T1204.002</id></mitre>
+        <group>command_and_control,c2_callback,high_confidence,</group>
+    </rule>
 </group>
