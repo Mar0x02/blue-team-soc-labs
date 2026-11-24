@@ -68,6 +68,8 @@ custom.rules
 
 Di **Interfaces → LAN1 → General Settings**, biarin **Block Offenders / IPS Mode** dalam keadaan **unchecked** — konsisten sama filosofi lab "deteksi dulu, bukan blocking". Suricata cuma nge-alert, gak drop paket.
 
+> **Update 2026-11-24:** keputusan ini cuma berlaku buat tahap awal (fase **detection**). Lab udah resmi masuk fase **prevention** — lihat [Section "Upgrade: Inline IPS Mode"](#upgrade-inline-ips-mode) di bawah buat langkah naik ke IPS beneran.
+
 ### 5. Start Suricata di interface LAN1
 
 Balik ke **Suricata → Interfaces**, klik tombol **Start** (▶) di baris LAN1.
@@ -119,8 +121,61 @@ Rule dasar + contoh child rule spesifik ada di [`Detection-Engineer/wazuh/rule/s
 
 ---
 
+## Upgrade: Inline IPS Mode
+
+Lab resmi pindah dari fase **detection** ke fase **prevention** (lihat roadmap belajar: detection → cleaning → prevention → SOAR). Suricata di pfSense punya 2 mode blocking yang beda arsitektur:
+
+- **Legacy Mode** — Suricata tetap passive/sniffing (PCAP engine, copy paket). Pas rule match, ada **"leakage"**: paket yang jadi pemicu match itu sendiri tetep lolos duluan, baru IP offender diblokir buat koneksi selanjutnya lewat pf table. Lebih ke auto-blocklist reaktif, bukan beneran nyegat payload-nya.
+- **Inline Mode** — Suricata disisipin **langsung di jalur forwarding** (netmap), ngecek paket SEBELUM diterusin ke host network stack. Rule dengan action `DROP` bikin paketnya **didiscard langsung, zero leakage**. Butuh NIC driver yang kompatibel netmap (`bnxt, cc, cxgbe, cxl, em, ena, ice, igb, igc, ix, ixgbe, ixl, lem, re, vmx, vtnet`) — interface LAN1 di lab ini pake driver `em` (`em1`), termasuk yang didukung.
+
+**Dipilih Inline Mode**, bukan Legacy — biar dapet pelajaran IPS yang "lengkap" (termasuk risiko nyatanya: kalau rule salah/terlalu luas, yang kena bukan cuma missed detection, tapi traffic legit beneran ke-drop).
+
+### 9. Syarat wajib: disable hardware offloading
+
+Suricata eksplisit nolak jalan bener di Inline Mode kalau **Hardware Checksum Offloading**, **Hardware TCP Segmentation Offloading**, sama **Hardware Large Receive Offloading** masih aktif (bisa korup paket di netmap). Dicek & dibenerin di **System → Advanced → Networking** → centang ketiga opsi **"Disable hardware ... offload"** → **Save** → **reboot pfSense** (perubahan ini baru efektif setelah reboot/re-configure interface).
+
+### 10. Aktifkan Inline Mode di interface LAN1
+
+**Services → Suricata → Interfaces → LAN1 → LAN Settings**, scroll ke section **"Alert and Block Settings"**:
+
+```
+IPS Mode        : Inline Mode (dari default "Legacy Mode")
+Netmap Threads  : auto (default — Suricata query jumlah netmap queue yang didukung NIC, di lab ini cuma 1 queue, jadi isi manual pun hasilnya sama)
+```
+
+Lanjut ke section **"Performance and Detection Engine Settings"**:
+
+```
+Run Mode : Workers (dari default "AutoFP" — direkomendasikan eksplisit di tooltip package buat performa Inline IPS)
+```
+
+**Save**, lalu restart Suricata di interface LAN1 (cek status jalan normal, gak crash loop — risiko utama kalau driver NIC gak kompatibel netmap, tapi `em` udah masuk daftar yang didukung).
+
+![Konfigurasi final: IPS Mode Inline, Netmap Threads auto, Run Mode Workers](asset/pfsense-suricata-ips-inline-mode-config.png)
+
+> `Block Offenders` dibiarin apa adanya (checked/unchecked gak masalah) — field ini & field terkait Legacy blocking (`Which IP to Block`, `Block On DROP Only`, `Kill States`) otomatis di-ignore selama `IPS Mode` di-set ke Inline, berdasarkan catatan di UI package-nya sendiri.
+
+### 11. Langkah lanjutan (belum dikerjain di titik ini)
+
+Inline Mode doang **belum bikin apa-apa ke-block** — rule yang aktif sekarang semua masih action `alert`. Supaya beneran prevention, custom rule di [`Detection-Engineer/suricata-trigger-rule/custom.rules`](../Detection-Engineer/suricata-trigger-rule/custom.rules) perlu dikonversi selektif dari `alert` ke `drop` (gak borongan semua 9 rule sekaligus — mulai dari yang paling spesifik/kecil risiko false-positive, misal `sid:1000003` command injection separator & `sid:1000008` outbound raw reverse shell), baru di-replay attack yang sama buat verifikasi paketnya beneran gak nyampe ke Web-Server.
+
+---
+
 ## Verifikasi
 
 ✅ **Decoder & rule dasar confirmed** — divalidasi pakai `wazuh-logtest` dengan sample raw log Suricata beneran (`SURICATA STREAM excessive retransmissions`), semua field ke-extract dengan benar (`suricata.sid`, `suricata.message`, `suricata.classification`, `suricata.priority`, `protocol`, `srcip`, `srcport`, `dstip`, `dstport`), rule `100400` fire dengan alert level 3.
 
 ✅ **End-to-end confirmed** — payload command injection asli (`;id`) di-replay dari Kali, custom rule `custom.rules` (SID `1000003`, "Detect Command Injection separators in POST Body") ke-trigger Suricata di LAN1, alert-nya nyampe ke Wazuh Dashboard lewat decoder+rule `100400` yang sama. Muncul BARENGAN sama alert auditd (`100300`) buat request yang sama — network layer (Suricata) dan endpoint layer (auditd) dua-duanya independen ke-detect. Detail lengkap + evidence GIF ada di section ["Verifikasi Remediasi"](../Labs/web-server-attack/command-injection/README.md#verifikasi-remediasi--blind-spot-sekarang-ketutup) di writeup Command Injection.
+
+✅ **Inline IPS Mode (2026-11-24) — blocking CONFIRMED LIVE.** Rule `sid:1000010` (duplikat `sid:1000003` dengan action `drop`) di-replay pakai payload command injection asli (`;id`) dari Kali ke `10.10.10.5` (WAF, bukan langsung ke DVWA `10.10.10.10` — lihat catatan topologi di bawah). Hasil:
+
+- **Sisi client (Kali):** request browser timeout (`The connection has timed out`, `192.168.43.100/vulnerabilities/exec/#`) — paket beneran gak nyampe/gak dapet respons, bukan cuma delay.
+- **Sisi Suricata (Alert Log):** dua rule sama-sama match paket yang sama di jam `22:05:24` — `sid:1000003` (`alert`, baris biasa) dan `sid:1000010` (`drop`, baris **highlighted merah + ikon block**). Sesuai priority aksi Suricata (`pass > drop > reject > alert`), `drop` menang dan paketnya didiscard — logging dua-duanya tetep jalan, cuma nasib paketnya yang ditentuin rule `drop`.
+
+![Client Kali timeout saat request command injection dikirim](asset/pfsense-suricata-ips-inline-drop-client-timeout.png)
+![Alert log: sid:1000003 (alert) vs sid:1000010 (drop, highlighted) match paket yang sama](asset/pfsense-suricata-ips-inline-drop-alert-log-confirmed.png)
+![Custom Rules live: rule drop (sid:1000010) ditambah berdampingan sama rule alert asli](asset/pfsense-suricata-ips-inline-drop-custom-rules-live.png)
+
+**Catatan topologi (penting):** target block ini `10.10.10.5` (WAF `sentinel-waf`, reverse proxy di depan DVWA — lihat [`Infrastructure/waf/sentinel-waf/README.md`](waf/sentinel-waf/README.md)), bukan `10.10.10.10` (DVWA langsung). Suricata Inline di LAN1 kebukti bisa lihat & drop traffic di KEDUA hop (Kali→WAF `192.168.43.193→10.10.10.5` dan juga WAF→DVWA `10.10.10.5→10.10.10.10` muncul di log terpisah) — jadi topologi WAF-di-depan-webapp TIDAK jadi blind spot buat Suricata, kontra dugaan awal soal lateral traffic antar host di subnet yang sama.
+
+**Belum dirapihin (technical debt, dicatat apa adanya):** `custom.rules` sekarang ada `sid:1000003` (`alert`) dan `sid:1000010` (`drop`) berdampingan — duplikat logic buat tujuan pembuktian cepat kalau `drop` beneran menang priority atas `alert`. Konsolidasi jadi 1 rule bersih (hapus `1000010`, edit `1000003` langsung jadi `drop`), plus putuskan `sid:1000008` (reverse shell) ikut dikonversi ke `drop` atau tetep `alert` — belum dikerjain, jadi backlog buat lab IPS yang bakal dibikin terpisah.
