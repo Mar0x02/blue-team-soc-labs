@@ -2,10 +2,10 @@ detect:
     event: NEW_PROCESS
     op: and
     rules:
-        - op: starts with
+        - op: ends with
           path: event/FILE_PATH
-          value: /tmp
-        
+          value: base64
+
         - op: or
           rules:
             - op: contains
@@ -29,30 +29,13 @@ detect:
             - op: contains
               path: event/COMMAND_LINE
               value: gzip -dc
-        
-        - op: or
-          rules:
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| bash"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| sh"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| dash"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| python"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| perl"
+
 respond:
   - action: report
-    name: "CRITICAL: Base64 Decode + Execute Pattern Detected from TMP"
+    name: "CRITICAL: Base64/Gzip Decode Executed from Tmp-Spawned Process"
     priority: 5  # Highest priority
   - action: task
-    command: os_kill_process --pid {{ .event.PROCESS_ID }}
+    command: os_kill_process --pid {{ .event.PARENT_PROCESS_ID }}
   - action: add tag
     tag: base64_payload_execution_from_tmp
     ttl: 86400

@@ -5,5 +5,5 @@ detect:
 
 respond:
   - action: report
-    name: "FIM Detection Alert - {{ .event.REGISTRY_KEY }}{{ .event.PROCESS.FILE_PATH }}"
+    name: "FIM Detection Alert - {{ .event.ACTION }}{{ .event.FILE_PATH }}"
     priority: 2

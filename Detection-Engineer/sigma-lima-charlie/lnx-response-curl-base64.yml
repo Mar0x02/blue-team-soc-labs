@@ -1,63 +1,20 @@
 detect:
     event: NEW_PROCESS
-    op: and
+    op: or
     rules:
-        - op: or
-          rules:
-            - op: contains
-              path: event/COMMAND_LINE
-              value: curl
-            - op: contains
-              path: event/COMMAND_LINE
-              value: wget
-        
-        - op: or
-          rules:
-            - op: contains
-              path: event/COMMAND_LINE
-              value: base64 -d
-            - op: contains
-              path: event/COMMAND_LINE
-              value: base64 --decode
-            - op: contains
-              path: event/COMMAND_LINE
-              value: gzip -d
-            - op: contains
-              path: event/COMMAND_LINE
-              value: gzip --decompress
-            - op: contains
-              path: event/COMMAND_LINE
-              value: gzip -c
-            - op: contains
-              path: event/COMMAND_LINE
-              value: gzip --stdout
-            - op: contains
-              path: event/COMMAND_LINE
-              value: gzip -dc
-        
-        - op: or
-          rules:
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| bash"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| sh"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| dash"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| python"
-            - op: contains
-              path: event/COMMAND_LINE
-              value: "| perl"
+        - op: contains
+          path: event/COMMAND_LINE
+          value: curl
+        - op: contains
+          path: event/COMMAND_LINE
+          value: wget
+
 respond:
   - action: report
-    name: "CRITICAL:Curl Base64 Decode + Execute Pattern Detected"
+    name: "CRITICAL: Curl/Wget Download from Tmp-Spawned Process"
     priority: 5  # Highest priority
   - action: task
-    command: os_kill_process --pid {{ .event.PROCESS_ID }}
+    command: os_kill_process --pid {{ .event.PARENT_PROCESS_ID }}
   - action: add tag
-    tag: curl_base64_payload_execution
+    tag: curl_download_from_tmp
     ttl: 86400
